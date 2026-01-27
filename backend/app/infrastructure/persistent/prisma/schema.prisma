@@ -1,0 +1,43 @@
+generator client {
+  provider             = "prisma-client-py"
+  recursive_type_depth = "5"
+  interface            = "asyncio"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = "postgresql://postgres@127.0.0.1:5432/techtask_generator"
+}
+
+model User {
+  id            BigInt            @id @default(autoincrement())
+  email         String            @unique @db.VarChar(254)
+  login         String            @unique @db.VarChar(64)
+  first_name    String            @db.VarChar(64)
+  middle_name   String?           @db.VarChar(64)
+  last_name     String            @db.VarChar(64)
+  is_active     Boolean           @default(false)
+  password_hash String            @db.VarChar(256)
+  created_at    DateTime          @default(now())
+  updated_at    DateTime          @updatedAt
+  subscriptions SubscriptionLog[]
+  sessions Session[]
+}
+
+model Session {
+  id String @id @db.Uuid
+  user_id BigInt
+  user_agent String @db.VarChar(128)
+  expires_at DateTime
+
+  user User @relation(fields: [user_id], references: [id])
+}
+
+model SubscriptionLog {
+  id       BigInt   @id @default(autoincrement())
+  user_id  BigInt
+  price    Float    @db.DoublePrecision
+  start_dt DateTime
+  till_dt  DateTime
+  user     User     @relation(fields: [user_id], references: [id])
+}

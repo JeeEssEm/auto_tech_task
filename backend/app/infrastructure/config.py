@@ -14,12 +14,12 @@ class UvicornSettings(BaseSettings):
 class AuthSettings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="AUTH_")
 
-    jwt_secret: str = "change_me_in_production"
-    jwt_algorithm: str = "HS256"
+    session_expire_seconds: int = 60 * 60 * 24 * 30 # 30 дней
 
 
 class AppSettings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
+    debug: bool = True
     uvicorn: UvicornSettings = UvicornSettings()
     auth: AuthSettings = AuthSettings()

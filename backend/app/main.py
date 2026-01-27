@@ -4,8 +4,9 @@ from contextlib import asynccontextmanager
 import uvicorn
 from fastapi import FastAPI
 
-from infrastructure.config import AppSettings
-from infrastructure.di import setup_di
+from backend.app.infrastructure.config import AppSettings
+from backend.app.infrastructure.di import setup_di
+from backend.app.web.handlers import register_routers
 
 
 @asynccontextmanager
@@ -17,6 +18,7 @@ async def create_app(config: AppSettings):
     app = FastAPI(title="Auto technical task generator API", lifespan=lifespan)
     # TODO: CORS
 
+    register_routers(app)
     setup_di(app, config)
 
     @app.get("/health")
