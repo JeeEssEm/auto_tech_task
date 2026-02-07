@@ -1,15 +1,17 @@
 from typing import AsyncIterable
 
+from taskiq import AsyncBroker
 from dishka import Provider, provide, Scope
 from prisma import Prisma
 
-from ..config import AppSettings
+from backend.app.infrastructure.config import AppSettings
 
-from ..persistent.user import UserRepository
+from backend.app.infrastructure.persistent.user import UserRepository
 from backend.app.services.user import UserService
+from backend.worker import create_broker_from_config
 
 
-class AppProvider(Provider):
+class InfraProvider(Provider):
     def __init__(self, config: AppSettings):
         super().__init__()
         self._config = config
@@ -32,3 +34,7 @@ class AppProvider(Provider):
     @provide(scope=Scope.REQUEST)
     async def get_user_service(self, repo: UserRepository) -> UserService:
         return UserService(repo, self._config)
+
+    @provide(scope=Scope.APP)
+    def provide_taskiq_broker(self) -> AsyncBroker:
+        return create_broker_from_config(self._config)

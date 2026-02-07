@@ -1,0 +1,48 @@
+networks:
+  app_network:
+    driver: bridge
+
+services:
+  db:
+      image: postgres:17-alpine
+      restart: unless-stopped
+      env_file: .env
+      environment:
+          POSTGRES_USER: ${POSTGRES_USER}
+          POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+          POSTGRES_DB: ${POSTGRES_DB}
+      volumes:
+        - postgres-data:/var/lib/postgresql/data/
+      networks:
+        - app_network
+      ports:
+        - "5432:5435"
+
+  redis:
+    image: redis:8-alpine
+    restart: unless-stopped
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+      REDIS_USER: ${REDIS_USER}
+      REDIS_USER_PASSWORD: ${REDIS_USER_PASSWORD}
+    volumes:
+      - redis-data:/data
+    ports:
+      - "6379:6379"
+
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    restart: unless-stopped
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_DEFAULT_USER}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_DEFAULT_PASS}
+    ports:
+      - "5672:5672"
+      - "15672:15672"  # Management UI
+    volumes:
+      - rabbitmq:/var/lib/rabbitmq
+
+volumes:
+  postgres-data:
+  redis-data:
+  rabbitmq:
