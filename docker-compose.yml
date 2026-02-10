@@ -42,6 +42,19 @@ services:
     volumes:
       - rabbitmq:/var/lib/rabbitmq
 
+  seaweedfs:
+    image: chrislusf/seaweedfs:latest
+    ports:
+      - "9333:9333"   # Master
+      - "8080:8080"   # Volume
+      - "8888:8888"   # Filer
+      - "8333:8333"   # S3
+    command: 'server -s3 -s3.config=/etc/seaweedfs/s3_config.json -dir=/data'
+    volumes:
+      - ./data:/data
+      - ./s3_config.json:/etc/seaweedfs/s3_config.json
+    restart: unless-stopped
+
 volumes:
   postgres-data:
   redis-data:

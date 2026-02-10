@@ -9,6 +9,11 @@ datasource db {
   url      = "postgresql://postgres@127.0.0.1:5432/techtask_generator"
 }
 
+enum Sender {
+  USER
+  LLM
+}
+
 model User {
   id            BigInt            @id @default(autoincrement())
   email         String            @unique @db.VarChar(254)
@@ -20,8 +25,11 @@ model User {
   password_hash String            @db.VarChar(256)
   created_at    DateTime          @default(now())
   updated_at    DateTime          @updatedAt
+
+  chats Chat[]
   subscriptions SubscriptionLog[]
   sessions Session[]
+  attachments Attachment[]
 }
 
 model Session {
@@ -32,6 +40,41 @@ model Session {
 
   user User @relation(fields: [user_id], references: [id])
 }
+
+model Chat {
+  id BigInt @id @default(autoincrement())
+  name String @db.VarChar(128)
+  owner_id BigInt
+
+  owner User @relation(fields: [owner_id], references: [id])
+  messages Message[]
+}
+
+model Message {
+  id BigInt @id @default(autoincrement())
+  chat_id BigInt
+
+  sender Sender @default(USER)
+  body String @db.Text
+
+  chat Chat @relation(fields: [chat_id], references: [id])
+  attachments Attachment[]
+}
+
+model Attachment {
+  id String @id @db.VarChar(128)
+  message_id BigInt?
+  owner_id BigInt
+
+  file_type String @db.VarChar(256) // max mime type length is 256
+  file_size Float
+
+  created_at DateTime @default(now())
+
+  owner User @relation(fields: [owner_id], references: [id])
+  message Message? @relation(fields: [message_id], references: [id])
+}
+
 
 model SubscriptionLog {
   id       BigInt   @id @default(autoincrement())
