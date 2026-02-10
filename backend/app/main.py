@@ -6,6 +6,7 @@ from fastapi import FastAPI
 from taskiq import AsyncBroker
 
 from backend.app.infrastructure.config import AppSettings
+from backend.app.infrastructure.storage import StorageWorker
 from backend.app.infrastructure.di import setup_di
 from backend.app.web.handlers import register_routers
 
@@ -17,8 +18,10 @@ def create_lifespan(config: AppSettings):
     async def lifespan(app: FastAPI):
         container = app.state.dishka_container
         broker: AsyncBroker = await container.get(AsyncBroker)
+        storage_worker: StorageWorker = await container.get(StorageWorker)
 
         register_tasks(broker)
+        await storage_worker.create_bucket("user-files")
         await broker.startup()
 
         yield

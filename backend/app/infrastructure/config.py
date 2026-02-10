@@ -50,6 +50,23 @@ class TaskQueueSettings(BaseSettings):
     queue_name: str = "tasks"
 
 
+class StorageSettings(BaseSettings):
+    model_config = SettingsConfigDict(env_prefix="STORAGE_")
+
+    HOST: str = "localhost"
+    PORT: int = 8333
+
+    ACCESS_KEY: str = "change-me-in-prod"
+    SECRET_KEY: str = "definitely-change-me-in-prod"
+
+    REGION: str = ""
+    BUCKET_NAME: str = "user-files"
+
+    @property
+    def connection_url(self) -> str:
+        return f"http://{self.HOST}:{self.PORT}"
+
+
 class AppSettings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
@@ -59,3 +76,4 @@ class AppSettings(BaseSettings):
     rabbitmq: RabbitMqSettings = RabbitMqSettings()
     redis: RedisSettings = RedisSettings()
     task_queue: TaskQueueSettings = TaskQueueSettings()
+    storage: StorageSettings = StorageSettings()
