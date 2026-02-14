@@ -9,7 +9,7 @@ class SignupUser(BaseModel):
     login: str = Field(..., min_length=3, max_length=64)
 
     firstname: str = Field(..., min_length=3, max_length=64)
-    middlename: str = Field(..., min_length=3, max_length=64)
+    middlename: str | None = Field(..., min_length=3, max_length=64)
     lastname: str = Field(..., min_length=3, max_length=64)
 
     password: str = Field(..., min_length=8, max_length=128)
@@ -36,16 +36,13 @@ class SignupUser(BaseModel):
             raise ValueError("Passwords do not match")
         return value
 
-    def to_domain(self) -> User:
-        return User(
-            email=str(self.email),
-            login=self.login,
-            firstname=self.firstname,
-            middlename=self.middlename,
-            lastname=self.middlename
-        )
-
 
 class LoginUser(BaseModel):
     email_or_login: EmailStr | str
     password: str = Field(..., min_length=8, max_length=128)
+
+
+class SuccessSignup(BaseModel):
+    success: bool
+    message: str | None
+    need_to_activate: bool

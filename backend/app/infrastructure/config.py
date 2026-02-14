@@ -15,6 +15,7 @@ class AuthSettings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="AUTH_")
 
     session_expire_seconds: int = 60 * 60 * 24 * 30 # 30 дней
+    user_active: bool = False
 
 
 class RedisSettings(BaseSettings):

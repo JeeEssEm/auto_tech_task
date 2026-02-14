@@ -1,6 +1,6 @@
 generator client {
   provider             = "prisma-client-py"
-  recursive_type_depth = "5"
+  recursive_type_depth = "3"
   interface            = "asyncio"
 }
 
@@ -21,6 +21,7 @@ model User {
   first_name    String            @db.VarChar(64)
   middle_name   String?           @db.VarChar(64)
   last_name     String            @db.VarChar(64)
+  role          Int               @db.SmallInt
   is_active     Boolean           @default(false)
   password_hash String            @db.VarChar(256)
   created_at    DateTime          @default(now())

@@ -8,34 +8,33 @@ from prisma.types import (
 )
 
 from backend.app.domain.user import User as DomainUser
+from backend.app.domain.user.value_objects.roles import UserRoles
 
 
 class UserRepository:
     def __init__(self, db: Prisma):
         self._db = db
 
-    async def create_user_async(self, user_data: DomainUser, password_hash: str) -> User:
+    async def create_user_async(
+            self, email: str, login: str, firstname: str, middlename: str, lastname: str, password_hash: str
+    ) -> User:
         return await self._db.user.create(
             UserCreateInput(
-                email=user_data.email,
-                login=user_data.login,
-                first_name=user_data.firstname,
-                middle_name=user_data.middlename,
-                last_name=user_data.lastname,
-                password_hash=password_hash
+                email=email,
+                login=login,
+                first_name=firstname,
+                middle_name=middlename,
+                last_name=lastname,
+                password_hash=password_hash,
+                role=UserRoles.MEMBER
             )
         )
 
-    async def user_exists_async(self, login: str, email: str) -> bool:
-        user_count = await self._db.user.count(
-            where=UserWhereInput(
-                OR=[
-                    UserWhereInputRecursive1(email=email),
-                    UserWhereInputRecursive1(login=login)
-                ]
-            )
-        )
-        return user_count != 0
+    async def user_login_exists_async(self, login: str) -> bool:
+        return await self._db.user.find_first(where=UserWhereInput(login=login)) is not None
+
+    async def user_email_exists_async(self, email: str) -> bool:
+        return await self._db.user.find_first(where=UserWhereInput(email=email)) is not None
 
     async def get_user_by_email_or_login_async(self, login_or_email: str) -> User | None:
         user = await self._db.user.find_first(

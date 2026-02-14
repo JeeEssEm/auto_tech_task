@@ -6,14 +6,19 @@ from backend.app.infrastructure.config import AppSettings
 from backend.app.infrastructure.persistent.user import UserRepository
 from backend.app.web.schemas.user import auth as auth_schemas
 from backend.app.services.user import UserService
-from backend.app.domain.user.exceptions import InvalidSession
+from backend.app.web.exceptions import InvalidSession
 
 router = APIRouter(prefix="/auth", route_class=DishkaRoute, tags=["auth"])
 
 
 @router.post("/signup")
-async def signup(data: auth_schemas.SignupUser, service: FromDishka[UserService]):
-    return await service.create_user_async(data)
+async def signup(data: auth_schemas.SignupUser, service: FromDishka[UserService], config: FromDishka[AppSettings]):
+    await service.create_user_async(data)
+    return auth_schemas.SuccessSignup(
+        success=True,
+        message=None,
+        need_to_activate=config.auth.user_active
+    )
 
 
 @router.post("/login")
@@ -33,6 +38,7 @@ async def login(
         secure=not cfg.debug,
         max_age=cfg.auth.session_expire_seconds
     )
+    # TODO: CSRF protection
     return {
         "message": "ok"
     }
