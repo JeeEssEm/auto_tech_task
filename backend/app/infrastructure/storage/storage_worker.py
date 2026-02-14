@@ -6,6 +6,7 @@ from botocore.exceptions import ClientError, DataNotFoundError
 from types_aiobotocore_s3 import S3Client
 
 from backend.app.infrastructure.config import AppSettings
+from backend.app.web.exceptions import AttachmentFileIsTooBig
 
 
 class StorageWorker:
@@ -67,16 +68,13 @@ class StorageWorker:
             self,
             bucket: str,
             key: str,
-            stream: BinaryIO | AsyncIterator[bytes],
+            stream: AsyncIterator[bytes],
             content_type: str | None = None,
-            chunk_size: int = 5 * 1024 * 1024,  # 5MB - минимум для multipart
-    ) -> str:
+            chunk_size: int = 5 * 1024 * 1024,
+            max_file_size: int = 1 * 1024 * 1024 * 1024
+    ) -> tuple[str, int]:
         """
-        Загружает файл через multipart upload из стрима.
-        Подходит для FastAPI UploadFile.
-
-        stream: либо sync file-like объект, либо async iterator
-        Возвращает ETag.
+        Возвращает (ETag, actual_size)
         """
         async with self._get_client() as client:
             create_resp = await client.create_multipart_upload(
@@ -86,69 +84,66 @@ class StorageWorker:
             )
             upload_id = create_resp["UploadId"]
 
-            parts: list[dict] = []
+            parts = []
             part_number = 1
+            buffer = b""
+            total_bytes = 0
 
             try:
-                if hasattr(stream, "__anext__"):
-                    buffer = b""
-                    async for chunk in stream:
-                        buffer += chunk
-                        while len(buffer) >= chunk_size:
-                            part_data = buffer[:chunk_size]
-                            buffer = buffer[chunk_size:]
+                async for chunk in stream:
+                    total_bytes += len(chunk)
+                    if total_bytes > max_file_size:
+                        raise AttachmentFileIsTooBig(max_file_size)
 
-                            resp = await client.upload_part(
-                                Bucket=bucket,
-                                Key=key,
-                                UploadId=upload_id,
-                                PartNumber=part_number,
-                                Body=part_data,
-                            )
-                            parts.append({"PartNumber": part_number, "ETag": resp["ETag"]})
-                            part_number += 1
+                    buffer += chunk
 
-                    if buffer:
-                        resp = await client.upload_part(
-                            Bucket=bucket,
-                            Key=key,
-                            UploadId=upload_id,
-                            PartNumber=part_number,
-                            Body=buffer,
-                        )
-                        parts.append({"PartNumber": part_number, "ETag": resp["ETag"]})
-
-                else:
-                    while True:
-                        chunk = stream.read(chunk_size)
-                        if not chunk:
-                            break
+                    while len(buffer) >= chunk_size:
+                        part_data = buffer[:chunk_size]
+                        buffer = buffer[chunk_size:]
 
                         resp = await client.upload_part(
                             Bucket=bucket,
                             Key=key,
                             UploadId=upload_id,
                             PartNumber=part_number,
-                            Body=chunk,
+                            Body=part_data,
                         )
                         parts.append({"PartNumber": part_number, "ETag": resp["ETag"]})
                         part_number += 1
 
-                # Завершаем upload
+                if buffer:
+                    resp = await client.upload_part(
+                        Bucket=bucket,
+                        Key=key,
+                        UploadId=upload_id,
+                        PartNumber=part_number,
+                        Body=buffer,
+                    )
+                    parts.append({"PartNumber": part_number, "ETag": resp["ETag"]})
+
+                elif len(parts) == 0:
+                    resp = await client.upload_part(
+                        Bucket=bucket,
+                        Key=key,
+                        UploadId=upload_id,
+                        PartNumber=part_number,
+                        Body=b"",
+                    )
+                    parts.append({"PartNumber": part_number, "ETag": resp["ETag"]})
+
+                async for _ in stream:
+                    pass
+
                 complete_resp = await client.complete_multipart_upload(
                     Bucket=bucket,
                     Key=key,
                     UploadId=upload_id,
                     MultipartUpload={"Parts": parts},
                 )
-                return complete_resp["ETag"]
+                return complete_resp["ETag"], total_bytes
 
             except Exception:
-                await client.abort_multipart_upload(
-                    Bucket=bucket,
-                    Key=key,
-                    UploadId=upload_id,
-                )
+                await client.abort_multipart_upload(Bucket=bucket, Key=key, UploadId=upload_id)
                 raise
 
     async def get_object_stream(

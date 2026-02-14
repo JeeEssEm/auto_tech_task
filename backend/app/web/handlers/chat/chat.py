@@ -1,18 +1,19 @@
-import uuid
-
 from fastapi import APIRouter, Request, HTTPException, Header
 from fastapi.responses import StreamingResponse
 
 from dishka.integrations.fastapi import FromDishka, DishkaRoute
 
+from backend.app.domain.user import User
+from backend.app.infrastructure.persistent.user import UserRepository
 from backend.app.services import ChatService
 from backend.app.infrastructure.storage import StorageWorker
+from backend.app.infrastructure.auth.typed_roles import StaffUser, SuperUser, AuthenticatedUser
 
 router = APIRouter(prefix="/chat", route_class=DishkaRoute, tags=["chat"])
 
 
 @router.post("/create")
-async def create_chat():
+async def create_chat(staff: FromDishka[AuthenticatedUser]):
     pass
 
 
@@ -37,28 +38,31 @@ async def add_attachment_to_message():
 
 
 @router.post("/files/upload")
-async def upload_file(request: Request, service: FromDishka[ChatService], content_length: int = Header(...)):
-    # TODO: добавить ограничение на максимальный размер загружаемого файла:
-    # проверка на максимальный размер должна быть и внутри загрузки в S3! Нельзя полагаться только на Content-Length!
-    # Ограничение на размер файла лучше вынести в константу, например, в конфиг
+async def upload_file(
+        request: Request,
+        user: FromDishka[AuthenticatedUser],
+        service: FromDishka[ChatService]
+):
+    # TODO: вынести ограничение на максимальный размер загружаемого файла в конфиг
     # TODO: добавить ограничение на тип файла
     content_type = request.headers.get("content-type")
 
-    return await service.upload_attachment(1, content_type, content_length, request.stream())
+    return await service.upload_attachment(user.id, content_type, request.stream())
 
 
-@router.get("/get-file/{etag}")
-async def get_file(etag: str, storage: FromDishka[StorageWorker]):
-    try:
-        stream, meta = await storage.get_object_stream_with_meta(bucket="user-files", key=etag)
+@router.get("/files")
+async def get_file(
+        file_id: str,
+        user: FromDishka[AuthenticatedUser],
+        chat_service: FromDishka[ChatService],
+):
+    stream, meta = await chat_service.get_attachment_async(user.id, file_id)
 
-        return StreamingResponse(
-            stream,
-            media_type=meta["content_type"],
-            headers={
-                "Content-Length": str(meta["content_length"]),
-                "ETag": meta["etag"],
-            },
-        )
-    except Exception as e:
-        raise HTTPException(status_code=404, detail="File not found")
+    return StreamingResponse(
+        stream,
+        media_type=meta["content_type"],
+        headers={
+            "Content-Length": str(meta["content_length"]),
+            "ETag": meta["etag"],
+        },
+    )

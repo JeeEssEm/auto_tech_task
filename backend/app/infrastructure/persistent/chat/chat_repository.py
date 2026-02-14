@@ -83,20 +83,9 @@ class ChatRepository:
 
     async def check_user_has_attachment_async(self, user_id: int, attachment_id: str) -> bool:
         attachment = await self._db.attachment.find_first(
-            where=AttachmentWhereInput(
-                id=attachment_id,
-                message={
-                    "is": {
-                        "chat": {
-                            "is": {
-                                "owner_id": user_id
-                            }
-                        }
-                    }
-                }
-            )
+            where=AttachmentWhereInput(owner_id=user_id, id=attachment_id)
         )
         return attachment is not None
 
-    async def get_attachment_async(self, attachment_id: str) -> Attachment:
+    async def get_attachment_async(self, attachment_id: str) -> Attachment | None:
         return await self._db.attachment.find_first(where=AttachmentWhereInput(id=attachment_id))
