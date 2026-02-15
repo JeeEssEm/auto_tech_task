@@ -31,3 +31,30 @@ class NotEnoughRightsToCheckAttachment(BaseWebException):
             message=f"You cannot read attachment with id=`{attachment_id}`",
             http_code=status.HTTP_403_FORBIDDEN
         )
+
+
+class CannotCreateEmptyChat(BaseWebException):
+    def __init__(self):
+        super().__init__(
+            code="CHAT_CANNOT_BE_EMPTY",
+            message=f"Cannot create new chat without any message and attachments",
+            http_code=status.HTTP_400_BAD_REQUEST
+        )
+
+
+class MessageNotFound(BaseWebException):
+    def __init__(self, msg_id: str):
+        super().__init__(
+            code="CHAT_MESSAGE_NOT_FOUND",
+            message=f"Message with id={msg_id} not found",
+            http_code=status.HTTP_404_NOT_FOUND
+        )
+
+
+class ChatNotFound(BaseWebException):
+    def __init__(self, chat_id: int):
+        super().__init__(
+            code="CHAT_NOT_FOUND",
+            message=f"Chat with id={chat_id} not found",
+            http_code=status.HTTP_404_NOT_FOUND
+        )

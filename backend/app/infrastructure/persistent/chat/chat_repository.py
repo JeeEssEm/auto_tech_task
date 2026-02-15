@@ -1,30 +1,55 @@
 from prisma import Prisma
 from prisma.models import Chat, Message, Attachment
-from prisma.enums import Sender
 from prisma.types import (
     ChatWhereInput, ChatCreateInput, MessageCreateInput, AttachmentCreateInput, ChatWhereInput,
     MessageWhereInput, MessageInclude, AttachmentInclude, AttachmentWhereInput, ChatRelationFilter,
-    MessageRelationFilter
+    MessageRelationFilter, MessageUpdateInput, MessageWhereUniqueInput, AttachmentWhereUniqueInput,
+    AttachmentUpdateManyWithoutRelationsInput
 )
+
+from backend.app.domain.chat.value_objects.types import ChatTemplate, MessageSender
 
 
 class ChatRepository:
     def __init__(self, db: Prisma):
         self._db = db
 
-    async def create_chat_async(self, user_id: int) -> Chat:
-        return await self._db.chat.create(ChatCreateInput(owner_id=user_id, name="Unknown"))
+    async def create_chat_async(self, user_id: int, name: str, chat_template: ChatTemplate) -> Chat:
+        return await self._db.chat.create(
+            ChatCreateInput(
+                owner_id=user_id,
+                name=name,
+                template=str(chat_template.value)
+            )
+        )
 
     async def create_message_async(
             self,
             chat_id: int,
-            text: str,
+            text: str | None,
             is_user_sender: bool
     ) -> Message:
-        sender = Sender.LLM
+        sender = MessageSender.LLM
         if is_user_sender:
-            sender = Sender.USER
-        return await self._db.message.create(MessageCreateInput(chat_id=chat_id, body=text, sender=sender))
+            sender = MessageSender.USER
+        return await self._db.message.create(MessageCreateInput(chat_id=chat_id, body=text, sender=str(sender.value)))
+
+    async def add_attachments_to_message_async(
+            self,
+            attachment_ids: list[str],
+            message_id: int
+    ):
+        await self._db.message.update(
+            where=MessageWhereUniqueInput(id=message_id),
+            data=MessageUpdateInput(
+                attachments=AttachmentUpdateManyWithoutRelationsInput(
+                    connect=[
+                        AttachmentWhereUniqueInput(id=attachment_id)
+                        for attachment_id in attachment_ids
+                    ]
+                )
+            )
+        )
 
     async def create_attachment_async(
             self,
@@ -63,7 +88,8 @@ class ChatRepository:
         # TODO: по-хорошему надо пагинацию делать, чтоб гигантский json не тащить
         return await self._db.message.find_many(
             where=MessageWhereInput(chat_id=chat_id),
-            include=MessageInclude(attachments=True)
+            include=MessageInclude(attachments=True),
+            order={"created_at": "desc"}
         )
 
     async def check_user_has_chat_async(self, user_id: int, chat_id: int) -> bool:
@@ -89,3 +115,10 @@ class ChatRepository:
 
     async def get_attachment_async(self, attachment_id: str) -> Attachment | None:
         return await self._db.attachment.find_first(where=AttachmentWhereInput(id=attachment_id))
+
+    async def get_attachments_async(self, attachment_ids: list[str]) -> list[Attachment]:
+        return await self._db.attachment.find_many(where={
+            "id": {
+                "in": attachment_ids
+            }
+        })

@@ -5,7 +5,9 @@ from backend.app.infrastructure.persistent.chat import ChatRepository
 from backend.app.infrastructure.storage import StorageWorker
 
 from backend.app.infrastructure.config import AppSettings
-from backend.app.web.exceptions import NotEnoughRightsToCheckAttachment, AttachmentNotFound
+from backend.app.web.exceptions import CannotCreateEmptyChat, AttachmentNotFound, ChatNotFound, NotEnoughPermissions
+from backend.app.domain.chat.value_objects.types import ChatTemplate, MessageSender
+from backend.app.web.schemas.chat import SmallChat, Message as MessageSchema, Attachment
 
 
 class ChatService:
@@ -14,11 +16,23 @@ class ChatService:
         self._storage = storage
         self._bucket_name = config.storage.BUCKET_NAME
 
-    async def get_messages_async(self, user_id: int, chat_id: int):
+    async def get_messages_async(self, user_id: int, chat_id: int) -> list[MessageSchema]:
         if await self._chat_repo.check_user_has_chat_async(user_id, chat_id):
-            return self._chat_repo.get_chat_messages_async(chat_id)
+            return [
+                MessageSchema(
+                    id=msg.id,
+                    sender=MessageSender(msg.sender.strip()),
+                    text=msg.body,
+                    attachments=[
+                        Attachment(key=attach.id, file_size=attach.file_size, file_type=attach.file_type)
+                        for attach in msg.attachments
+                    ],
+                    created_at=msg.created_at
+                )
+                for msg in await self._chat_repo.get_chat_messages_async(chat_id)
+            ]
 
-        raise Exception() # TODO: сделать нормальное ForbiddenException
+        raise ChatNotFound(chat_id)
 
     async def get_attachment_async(self, user_id: int, attachment_id: str):
         if await self._chat_repo.check_user_has_attachment_async(user_id, attachment_id):
@@ -48,3 +62,47 @@ class ChatService:
             # TODO: добавить логгирование
             await self._storage.remove_object(bucket=self._bucket_name, key=attachment_id)
             raise
+
+    async def create_chat_async(
+            self,
+            chat_name: str,
+            owner_id: int,
+            attachment_ids: list[str],
+            template_type: ChatTemplate,
+            init_message: str | None
+    ) -> int:
+        if len(attachment_ids) == 0 and not init_message:
+            raise CannotCreateEmptyChat()
+
+        # TODO: проверка, что все attachment_id есть в бд
+        # TODO: проверка, что все attachment_id принадлежат ЭТОМУ юзеру
+
+        chat = await self._chat_repo.create_chat_async(owner_id, chat_name, chat_template=template_type)
+        message = await self._chat_repo.create_message_async(chat_id=chat.id, text=init_message, is_user_sender=True)
+        await self._chat_repo.add_attachments_to_message_async(attachment_ids, message.id)
+
+        return chat.id
+
+    async def get_user_chats_async(self, user_id: int, page: int, limit: int) -> list[SmallChat]:
+        chats = await self._chat_repo.get_user_chats_async(user_id, page=page, limit=limit)
+        return [SmallChat(id=chat.id, name=chat.name, template=ChatTemplate(chat.template)) for chat in chats]
+
+    async def create_message_async(self, user_id: int, chat_id: int, text: str | None, attachment_ids: list[str]) -> MessageSchema:
+        # TODO: проверить существование attachment_id и их принадлежность к юзеру
+        if not await self._chat_repo.check_user_has_chat_async(user_id, chat_id):
+            raise ChatNotFound(chat_id)
+
+        message = await self._chat_repo.create_message_async(chat_id, text, is_user_sender=True)
+        await self._chat_repo.add_attachments_to_message_async(attachment_ids, message.id)
+        attachments = await self._chat_repo.get_attachments_async(attachment_ids)
+
+        return MessageSchema(
+            id=message.id,
+            sender=MessageSender.USER,
+            text=text,
+            attachments=[
+                Attachment(key=attach.id, file_type=attach.file_type, file_size=attach.file_size)
+                for attach in attachments
+            ],
+            created_at=message.created_at
+        )

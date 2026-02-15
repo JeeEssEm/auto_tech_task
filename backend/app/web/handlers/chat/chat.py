@@ -7,34 +7,62 @@ from backend.app.domain.user import User
 from backend.app.infrastructure.persistent.user import UserRepository
 from backend.app.services import ChatService
 from backend.app.infrastructure.storage import StorageWorker
+from backend.app.web.schemas.chat import CreateChat, SmallChat, CreateMessage
 from backend.app.infrastructure.auth.typed_roles import StaffUser, SuperUser, AuthenticatedUser
+from backend.app.web.schemas.chat.chat import Message
 
 router = APIRouter(prefix="/chat", route_class=DishkaRoute, tags=["chat"])
 
 
 @router.post("/create")
-async def create_chat(staff: FromDishka[AuthenticatedUser]):
-    pass
+async def create_chat(
+        user: FromDishka[AuthenticatedUser],
+        chat_service: FromDishka[ChatService],
+        form_data: CreateChat
+) -> int:
+    return await chat_service.create_chat_async(
+        chat_name=form_data.name,
+        owner_id=user.id,
+        attachment_ids=form_data.attachment_ids,
+        init_message=form_data.init_user_message,
+        template_type=form_data.template_type
+    )
 
 
 @router.get("/all")
-async def get_user_chats():
-    pass
+async def get_user_chats(
+        user: FromDishka[AuthenticatedUser],
+        chat_service: FromDishka[ChatService],
+        page: int = 1,
+        limit: int = 10
+) -> list[SmallChat]:
+    # TODO: добавить сортировку по дате последнего сообщения!
+    return await chat_service.get_user_chats_async(user.id, page, limit)
 
 
 @router.post("/{chat_id}/messages")
-async def create_message():
-    pass
+async def create_message(
+        chat_id: int,
+        form_data: CreateMessage,
+        user: FromDishka[AuthenticatedUser],
+        chat_service: FromDishka[ChatService]
+) -> Message:
+    return await chat_service.create_message_async(
+        user_id=user.id,
+        chat_id=chat_id,
+        text=form_data.text,
+        attachment_ids=form_data.attachment_ids
+    )
 
 
 @router.get("/{chat_id}/messages")
-async def get_chat_messages():
-    pass
-
-
-@router.post("/{chat_id}/messages/{message_id}")
-async def add_attachment_to_message():
-    pass
+async def get_chat_messages(
+        chat_id: int,
+        user: FromDishka[AuthenticatedUser],
+        chat_service: FromDishka[ChatService]
+) -> list[Message]:
+    # TODO: добавить пагинацию
+    return await chat_service.get_messages_async(user_id=user.id, chat_id=chat_id)
 
 
 @router.post("/files/upload")
