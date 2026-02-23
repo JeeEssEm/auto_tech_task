@@ -58,3 +58,12 @@ class ChatNotFound(BaseWebException):
             message=f"Chat with id={chat_id} not found",
             http_code=status.HTTP_404_NOT_FOUND
         )
+
+
+class AttachmentFieldIsMissing(BaseWebException):
+    def __init__(self, field: str):
+        super().__init__(
+            code="CHAT_ATTACHMENT_FIELD_IS_MISSING",
+            message=f"Attachment field {field} is missing",
+            http_code=status.HTTP_400_BAD_REQUEST
+        )

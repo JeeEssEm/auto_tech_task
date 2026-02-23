@@ -51,26 +51,11 @@ class ChatRepository:
             )
         )
 
-    async def create_attachment_async(
-            self,
-            file_id: str,
-            message_id: int,
-            file_type: str,
-            file_size: float
-    ) -> Attachment:
+    async def create_orphan_attachment_async(self, file_id: str, file_type: str, file_name: str, file_size: float, user_id: int):
         return await self._db.attachment.create(
             AttachmentCreateInput(
                 id=file_id,
-                message_id=message_id,
-                file_type=file_type,
-                file_size=file_size
-            )
-        )
-
-    async def create_orphan_attachment_async(self, file_id: str, file_type: str, file_size: float, user_id: int):
-        return await self._db.attachment.create(
-            AttachmentCreateInput(
-                id=file_id,
+                file_name=file_name,
                 file_type=file_type,
                 file_size=file_size,
                 owner_id=user_id
@@ -89,7 +74,7 @@ class ChatRepository:
         return await self._db.message.find_many(
             where=MessageWhereInput(chat_id=chat_id),
             include=MessageInclude(attachments=True),
-            order={"created_at": "desc"}
+            order={"created_at": "asc"}
         )
 
     async def check_user_has_chat_async(self, user_id: int, chat_id: int) -> bool:

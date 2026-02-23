@@ -7,6 +7,7 @@ from backend.app.domain.user import User
 from backend.app.infrastructure.persistent.user import UserRepository
 from backend.app.services import ChatService
 from backend.app.infrastructure.storage import StorageWorker
+from backend.app.web.exceptions import AttachmentFieldIsMissing
 from backend.app.web.schemas.chat import CreateChat, SmallChat, CreateMessage
 from backend.app.infrastructure.auth.typed_roles import StaffUser, SuperUser, AuthenticatedUser
 from backend.app.web.schemas.chat.chat import Message
@@ -67,6 +68,7 @@ async def get_chat_messages(
 
 @router.post("/files/upload")
 async def upload_file(
+        file_name: str,
         request: Request,
         user: FromDishka[AuthenticatedUser],
         service: FromDishka[ChatService]
@@ -75,7 +77,10 @@ async def upload_file(
     # TODO: добавить ограничение на тип файла
     content_type = request.headers.get("content-type")
 
-    return await service.upload_attachment(user.id, content_type, request.stream())
+    if not file_name:
+        raise AttachmentFieldIsMissing("file_name")
+
+    return await service.upload_attachment(user.id, content_type, file_name, request.stream())
 
 
 @router.get("/files")

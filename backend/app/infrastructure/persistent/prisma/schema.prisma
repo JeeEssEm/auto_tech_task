@@ -64,6 +64,7 @@ model Attachment {
   message_id BigInt?
   owner_id BigInt
 
+  file_name String @db.VarChar(260) // max file name lenght is 260
   file_type String @db.VarChar(256) // max mime type length is 256
   file_size Float
 

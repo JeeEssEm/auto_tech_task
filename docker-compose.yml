@@ -21,6 +21,7 @@ services:
   redis:
     image: redis:8-alpine
     restart: unless-stopped
+    env_file: .env
     environment:
       REDIS_PASSWORD: ${REDIS_PASSWORD}
       REDIS_USER: ${REDIS_USER}

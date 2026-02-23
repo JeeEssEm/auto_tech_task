@@ -1,13 +1,17 @@
 import uuid
 from typing import AsyncGenerator
 
+from click import prompt
+
 from backend.app.infrastructure.persistent.chat import ChatRepository
 from backend.app.infrastructure.storage import StorageWorker
-
 from backend.app.infrastructure.config import AppSettings
+
 from backend.app.web.exceptions import CannotCreateEmptyChat, AttachmentNotFound, ChatNotFound, NotEnoughPermissions
-from backend.app.domain.chat.value_objects.types import ChatTemplate, MessageSender
 from backend.app.web.schemas.chat import SmallChat, Message as MessageSchema, Attachment
+from backend.app.domain.chat.value_objects.types import ChatTemplate, MessageSender
+
+from backend.worker.tasks.stupid_answer_task import generate_tz_task
 
 
 class ChatService:
@@ -24,7 +28,10 @@ class ChatService:
                     sender=MessageSender(msg.sender.strip()),
                     text=msg.body,
                     attachments=[
-                        Attachment(key=attach.id, file_size=attach.file_size, file_type=attach.file_type)
+                        Attachment(
+                            key=attach.id, file_size=attach.file_size, file_type=attach.file_type,
+                            file_name=attach.file_name
+                        )
                         for attach in msg.attachments
                     ],
                     created_at=msg.created_at
@@ -40,7 +47,7 @@ class ChatService:
 
         raise AttachmentNotFound(attachment_id)
 
-    async def upload_attachment(self, user_id: int, content_type: str, file_stream: AsyncGenerator[bytes, None]):
+    async def upload_attachment(self, user_id: int, content_type: str, file_name: str, file_stream: AsyncGenerator[bytes, None]):
         attachment_id = str(uuid.uuid4().hex)
 
         etag, actual_size = await self._storage.upload_stream(
@@ -55,6 +62,7 @@ class ChatService:
                 file_id=attachment_id,
                 file_type=content_type,
                 file_size=actual_size,
+                file_name=file_name,
                 user_id=user_id
             )
             return attachment_id
@@ -87,7 +95,9 @@ class ChatService:
         chats = await self._chat_repo.get_user_chats_async(user_id, page=page, limit=limit)
         return [SmallChat(id=chat.id, name=chat.name, template=ChatTemplate(chat.template)) for chat in chats]
 
-    async def create_message_async(self, user_id: int, chat_id: int, text: str | None, attachment_ids: list[str]) -> MessageSchema:
+    async def create_message_async(
+            self, user_id: int, chat_id: int, text: str | None, attachment_ids: list[str]
+    ) -> MessageSchema:
         # TODO: проверить существование attachment_id и их принадлежность к юзеру
         if not await self._chat_repo.check_user_has_chat_async(user_id, chat_id):
             raise ChatNotFound(chat_id)
@@ -96,12 +106,17 @@ class ChatService:
         await self._chat_repo.add_attachments_to_message_async(attachment_ids, message.id)
         attachments = await self._chat_repo.get_attachments_async(attachment_ids)
 
+        if text:
+            await generate_tz_task.kiq(chat_id=chat_id, user_id=user_id, prompt=text)
+
         return MessageSchema(
             id=message.id,
             sender=MessageSender.USER,
             text=text,
             attachments=[
-                Attachment(key=attach.id, file_type=attach.file_type, file_size=attach.file_size)
+                Attachment(
+                    key=attach.id, file_type=attach.file_type, file_size=attach.file_size, file_name=attach.file_name
+                )
                 for attach in attachments
             ],
             created_at=message.created_at
