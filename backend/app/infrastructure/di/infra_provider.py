@@ -15,7 +15,7 @@ from backend.app.infrastructure.storage import StorageWorker
 from backend.app.services import ChatService
 
 from backend.app.services.user import UserService
-from backend.worker import create_broker_from_config
+from backend.worker.broker import broker
 
 
 class InfraProvider(Provider):
@@ -43,10 +43,6 @@ class InfraProvider(Provider):
         return UserService(repo, self._config)
 
     @provide(scope=Scope.APP)
-    def provide_taskiq_broker(self) -> AsyncBroker:
-        return create_broker_from_config(self._config)
-
-    @provide(scope=Scope.APP)
     def provide_s3_storage_worker(self, config: AppSettings) -> StorageWorker:
         return StorageWorker(config)
 
@@ -57,3 +53,7 @@ class InfraProvider(Provider):
     @provide(scope=Scope.REQUEST)
     def provide_chat_service(self, repo: ChatRepository, storage: StorageWorker, config: AppSettings) -> ChatService:
         return ChatService(repo, storage, config)
+
+    @provide(scope=Scope.APP)
+    def provide_taskiq_broker(self) -> AsyncBroker:
+        return broker

@@ -1,8 +1,4 @@
-from typing import AsyncIterable
-
-from taskiq import AsyncBroker
 from dishka import Provider, provide, Scope, from_context
-from prisma import Prisma
 from fastapi import Request
 
 from backend.app.domain.user.entities import User
@@ -11,13 +7,8 @@ from backend.app.infrastructure.auth.typed_roles import AuthenticatedUser, Staff
 
 from backend.app.infrastructure.config import AppSettings
 from backend.app.infrastructure.persistent.user import UserRepository
-from backend.app.infrastructure.persistent.chat import ChatRepository
-from backend.app.infrastructure.storage import StorageWorker
-from backend.app.services import ChatService
 
-from backend.app.services.user import UserService
 from backend.app.web.exceptions import AuthRequired, NotEnoughPermissions, UserIsNotActivated
-from backend.worker import create_broker_from_config
 
 
 class AuthProvider(Provider):

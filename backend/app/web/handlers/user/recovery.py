@@ -5,7 +5,6 @@ from taskiq import AsyncBroker
 
 from dishka.integrations.fastapi import FromDishka, DishkaRoute
 
-from backend.worker.example.heavy_task import heavy_task
 
 router = APIRouter(prefix="/recovery", route_class=DishkaRoute, tags=["recovery"])
 

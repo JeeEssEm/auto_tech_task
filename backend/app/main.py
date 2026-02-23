@@ -12,7 +12,7 @@ from backend.app.infrastructure.di import setup_di
 from backend.app.web.handlers import register_routers
 from backend.app.web.exception_handlers import register_exception_handlers
 
-from backend.worker import register_tasks
+from backend.worker.broker import broker
 
 
 def setup_cors(app: FastAPI):
@@ -34,10 +34,9 @@ def create_lifespan(config: AppSettings):
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         container = app.state.dishka_container
-        broker: AsyncBroker = await container.get(AsyncBroker)
+
         storage_worker: StorageWorker = await container.get(StorageWorker)
 
-        register_tasks(broker)
         await storage_worker.create_bucket("user-files")
         await broker.startup()
 
