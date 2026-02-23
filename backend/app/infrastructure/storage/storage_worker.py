@@ -172,7 +172,7 @@ class StorageWorker:
         Metadata содержит content_type, content_length, etag и др.
         """
         async with self._get_client() as client:
-            response = await client.get_object(Bucket=bucket, Key=key)
+            response = await client.head_object(Bucket=bucket, Key=key)
 
             metadata = {
                 "content_type": response.get("ContentType"),
@@ -181,9 +181,4 @@ class StorageWorker:
                 "last_modified": response.get("LastModified"),
             }
 
-            async def stream_generator():
-                async with response["Body"] as stream:
-                    async for chunk in stream.content.iter_chunked(chunk_size):
-                        yield chunk
-
-            return stream_generator(), metadata
+        return self.get_object_stream(bucket, key, chunk_size), metadata
