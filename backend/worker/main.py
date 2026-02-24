@@ -5,6 +5,7 @@ from backend.worker.broker import broker, config
 from backend.app.infrastructure.di.infra_provider import InfraProvider
 
 import backend.worker.tasks.stupid_answer_task # noqa
+import backend.worker.tasks.parse_file # noqa
 
 container = make_async_container(InfraProvider(config))
 

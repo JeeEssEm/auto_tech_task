@@ -14,7 +14,15 @@ class MessageSender(enum.StrEnum):
     LLM = "LLM"
 
 
-class EventTypes(enum.StrEnum):
+class EventType(enum.StrEnum):
     LLM_ANSWER = "LLM_ANSWER"
     GENERATION_STATUS = "GENERATION_STATUS"
+    PARSING_STATUS = "PARSING_STATUS"
     ERROR = "ERROR"
+
+
+class ParsingStatus(enum.StrEnum):
+    PENDING = "PENDING"
+    IN_PROCESS = "IN_PROCESS"
+    SUCCESSFULLY_ENDED = "SUCCESSFULLY_ENDED"
+    FAILED = "FAILED"

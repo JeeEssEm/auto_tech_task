@@ -11,6 +11,7 @@ from backend.app.web.exceptions import CannotCreateEmptyChat, AttachmentNotFound
 from backend.app.web.schemas.chat import SmallChat, Message as MessageSchema, Attachment
 from backend.app.domain.chat.value_objects.types import ChatTemplate, MessageSender
 
+from backend.worker.tasks.parse_file import parse_file_task
 from backend.worker.tasks.stupid_answer_task import generate_tz_task
 
 
@@ -47,7 +48,7 @@ class ChatService:
 
         raise AttachmentNotFound(attachment_id)
 
-    async def upload_attachment(self, user_id: int, content_type: str, file_name: str, file_stream: AsyncGenerator[bytes, None]):
+    async def upload_attachment(self, user_id: int, content_type: str, filename: str, file_stream: AsyncGenerator[bytes, None]):
         attachment_id = str(uuid.uuid4().hex)
 
         etag, actual_size = await self._storage.upload_stream(
@@ -62,9 +63,12 @@ class ChatService:
                 file_id=attachment_id,
                 file_type=content_type,
                 file_size=actual_size,
-                file_name=file_name,
+                file_name=filename,
                 user_id=user_id
             )
+
+            await parse_file_task.kiq(user_id=user_id, attachment_id=attachment_id, filename=filename)
+
             return attachment_id
         except Exception as e:
             # TODO: добавить логгирование

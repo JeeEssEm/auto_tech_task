@@ -1,7 +1,8 @@
 from typing import BinaryIO, AsyncIterator
 from contextlib import asynccontextmanager
 
-from aiobotocore.session import get_session, AioSession
+# from aiobotocore.session import get_session, AioSession
+import aioboto3
 from botocore.exceptions import ClientError, DataNotFoundError
 from types_aiobotocore_s3 import S3Client
 
@@ -15,11 +16,11 @@ class StorageWorker:
         self._access_key = config.storage.ACCESS_KEY
         self._secret_key = config.storage.SECRET_KEY
         self._region = config.storage.REGION
-        self._session: AioSession = get_session()
+        self._session = aioboto3.Session()
 
     @asynccontextmanager
     async def _get_client(self) -> AsyncIterator[S3Client]:
-        async with self._session.create_client(
+        async with self._session.client(
                 "s3",
                 endpoint_url=self._endpoint_url,
                 aws_access_key_id=self._access_key,
@@ -182,3 +183,7 @@ class StorageWorker:
             }
 
         return self.get_object_stream(bucket, key, chunk_size), metadata
+
+    async def download_file(self, bucket: str, key: str, path: str):
+        async with self._get_client() as client:
+            await client.download_file(Bucket=bucket, Key=key, Filename=path)

@@ -8,7 +8,7 @@ import redis.asyncio as aredis
 from backend.app.infrastructure.utils.channels import get_channel_name
 from backend.worker.broker import broker
 from backend.app.infrastructure.persistent.chat import ChatRepository
-from backend.app.domain.chat.value_objects.types import EventTypes
+from backend.app.domain.chat.value_objects.types import EventType
 
 
 @broker.task(task_name="generate_tz")
@@ -33,8 +33,9 @@ async def generate_tz_task(
             get_channel_name(user_id),
             json.dumps({
                 "id": msg.id,
+                "chat_id": chat_id,
                 "text": generated_text,
-                "type": EventTypes.LLM_ANSWER,
+                "type": EventType.LLM_ANSWER,
                 "created_at": msg.created_at.isoformat()
             })
         )
@@ -44,6 +45,6 @@ async def generate_tz_task(
             get_channel_name(user_id),
             json.dumps({
                 "message": str(e),
-                "type": EventTypes.ERROR
+                "type": EventType.ERROR
             })
         )

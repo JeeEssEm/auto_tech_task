@@ -9,7 +9,7 @@ import redis.client
 
 from dishka.integrations.fastapi import inject, FromDishka
 
-from backend.app.domain.chat.value_objects.types import EventTypes
+from backend.app.domain.chat.value_objects.types import EventType
 from backend.app.infrastructure.persistent.user import UserRepository
 from backend.app.infrastructure.utils.channels import get_channel_name
 
@@ -24,10 +24,15 @@ async def task_status_listener(pubsub: redis.client.PubSub, websocket: WebSocket
                 continue
             data = json.loads(message["data"])
             match data["type"]:
-                case EventTypes.LLM_ANSWER:
+                case EventType.LLM_ANSWER:
                     await websocket.send_json(data)
-                case EventTypes.GENERATION_STATUS:
-                    await websocket.send({})
+
+                case EventType.GENERATION_STATUS:
+                    pass
+
+                case EventType.PARSING_STATUS:
+                    print(data) # TODO: убрать нафиг
+                    await websocket.send_json(data)
     except asyncio.CancelledError:
         pass
 
