@@ -1,13 +1,13 @@
 from prisma import Prisma
-from prisma.models import Chat, Message, Attachment
+from prisma.models import Chat, Message, Attachment, ParsedAttachment
 from prisma.types import (
     ChatWhereInput, ChatCreateInput, MessageCreateInput, AttachmentCreateInput, ChatWhereInput,
     MessageWhereInput, MessageInclude, AttachmentInclude, AttachmentWhereInput, ChatRelationFilter,
     MessageRelationFilter, MessageUpdateInput, MessageWhereUniqueInput, AttachmentWhereUniqueInput,
-    AttachmentUpdateManyWithoutRelationsInput
+    AttachmentUpdateManyWithoutRelationsInput, AttachmentUpdateInput, ParsedAttachmentCreateInput
 )
 
-from backend.app.domain.chat.value_objects.types import ChatTemplate, MessageSender
+from backend.app.domain.chat.value_objects.types import ChatTemplate, MessageSender, ParsingStatus
 
 
 class ChatRepository:
@@ -51,14 +51,17 @@ class ChatRepository:
             )
         )
 
-    async def create_orphan_attachment_async(self, file_id: str, file_type: str, file_name: str, file_size: float, user_id: int):
+    async def create_orphan_attachment_async(
+            self, file_id: str, file_type: str, file_name: str, file_size: float, user_id: int
+    ):
         return await self._db.attachment.create(
             AttachmentCreateInput(
                 id=file_id,
                 file_name=file_name,
                 file_type=file_type,
                 file_size=file_size,
-                owner_id=user_id
+                owner_id=user_id,
+                parsing_status=ParsingStatus.PENDING
             )
         )
 
@@ -102,8 +105,23 @@ class ChatRepository:
         return await self._db.attachment.find_first(where=AttachmentWhereInput(id=attachment_id))
 
     async def get_attachments_async(self, attachment_ids: list[str]) -> list[Attachment]:
-        return await self._db.attachment.find_many(where={
-            "id": {
-                "in": attachment_ids
+        return await self._db.attachment.find_many(
+            where={
+                "id": {
+                    "in": attachment_ids
+                }
             }
-        })
+        )
+
+    async def change_attachment_parsing_status_async(
+            self, status: ParsingStatus, attachment_id: str
+    ) -> ParsedAttachment | None:
+        return await self._db.attachment.update(
+            data=AttachmentUpdateInput(parsing_status=status),
+            where=AttachmentWhereUniqueInput(id=attachment_id)
+        )
+
+    async def create_parsed_attachment(self, parsed_attachment_id: str, raw_attachment_id: str) -> ParsedAttachment:
+        return await self._db.parsedattachment.create(
+            ParsedAttachmentCreateInput(id=parsed_attachment_id, raw_attachment_id=raw_attachment_id)
+        )

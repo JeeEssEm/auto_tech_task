@@ -24,5 +24,5 @@ class EventType(enum.StrEnum):
 class ParsingStatus(enum.StrEnum):
     PENDING = "PENDING"
     IN_PROCESS = "IN_PROCESS"
-    SUCCESSFULLY_ENDED = "SUCCESSFULLY_ENDED"
+    SUCCESS = "SUCCESS"
     FAILED = "FAILED"

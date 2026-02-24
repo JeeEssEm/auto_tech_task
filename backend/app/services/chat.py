@@ -1,7 +1,7 @@
 import uuid
 from typing import AsyncGenerator
 
-from click import prompt
+from prisma.models import ParsedAttachment
 
 from backend.app.infrastructure.persistent.chat import ChatRepository
 from backend.app.infrastructure.storage import StorageWorker
@@ -9,10 +9,8 @@ from backend.app.infrastructure.config import AppSettings
 
 from backend.app.web.exceptions import CannotCreateEmptyChat, AttachmentNotFound, ChatNotFound, NotEnoughPermissions
 from backend.app.web.schemas.chat import SmallChat, Message as MessageSchema, Attachment
-from backend.app.domain.chat.value_objects.types import ChatTemplate, MessageSender
+from backend.app.domain.chat.value_objects.types import ChatTemplate, MessageSender, ParsingStatus
 
-from backend.worker.tasks.parse_file import parse_file_task
-from backend.worker.tasks.stupid_answer_task import generate_tz_task
 
 
 class ChatService:
@@ -48,7 +46,9 @@ class ChatService:
 
         raise AttachmentNotFound(attachment_id)
 
-    async def upload_attachment(self, user_id: int, content_type: str, filename: str, file_stream: AsyncGenerator[bytes, None]):
+    async def upload_attachment(
+            self, user_id: int, content_type: str, filename: str, file_stream: AsyncGenerator[bytes, None]
+    ):
         attachment_id = str(uuid.uuid4().hex)
 
         etag, actual_size = await self._storage.upload_stream(
@@ -67,6 +67,8 @@ class ChatService:
                 user_id=user_id
             )
 
+            # пришлось накостылить из-за круговых импортов питона
+            from backend.worker.tasks.parse_file import parse_file_task
             await parse_file_task.kiq(user_id=user_id, attachment_id=attachment_id, filename=filename)
 
             return attachment_id
@@ -111,6 +113,8 @@ class ChatService:
         attachments = await self._chat_repo.get_attachments_async(attachment_ids)
 
         if text:
+            # пришлось накостылить из-за круговых импортов питона
+            from backend.worker.tasks.stupid_answer_task import generate_tz_task
             await generate_tz_task.kiq(chat_id=chat_id, user_id=user_id, prompt=text)
 
         return MessageSchema(
@@ -125,3 +129,15 @@ class ChatService:
             ],
             created_at=message.created_at
         )
+
+    async def save_parsed_file_async(self, parsed_text: str, attachment_id: str):
+        parsed_attachment_id = str(uuid.uuid4().hex)
+        await self._storage.load_text(bucket=self._bucket_name, key=parsed_attachment_id, text=parsed_text)
+
+        await self._chat_repo.change_attachment_parsing_status_async(ParsingStatus.SUCCESS, attachment_id)
+        await self._chat_repo.create_parsed_attachment(parsed_attachment_id, attachment_id)
+
+    async def change_attachment_parsing_status_async(
+            self, attachment_id: str, status: ParsingStatus
+    ) -> ParsedAttachment | None:
+        return await self._chat_repo.change_attachment_parsing_status_async(status, attachment_id)

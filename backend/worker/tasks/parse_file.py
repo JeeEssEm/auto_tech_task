@@ -14,6 +14,7 @@ from backend.app.infrastructure.persistent.chat import ChatRepository
 from backend.app.infrastructure.storage import StorageWorker
 
 from backend.app.domain.chat.value_objects.types import EventType, ParsingStatus
+from backend.app.services import ChatService
 from backend.worker.broker import broker
 from backend.worker.modules.parser.exceptions import ExtractorNotFound
 from backend.worker.modules.parser.universal_parser import parse
@@ -26,7 +27,7 @@ async def parse_file_task(
         attachment_id: str,
         filename: str,
         config: FromDishka[AppSettings],
-        chat_repo: FromDishka[ChatRepository],
+        chat_service: FromDishka[ChatService],
         redis_client: FromDishka[aredis.Redis],
         storage: FromDishka[StorageWorker]
 ):
@@ -39,6 +40,7 @@ async def parse_file_task(
             channel,
             create_status_message(ParsingStatus.IN_PROCESS, attachment_id)
         )
+        await chat_service.change_attachment_parsing_status_async(attachment_id, ParsingStatus.IN_PROCESS)
 
         if not os.path.exists(root_path):
             os.mkdir(root_path)
@@ -46,23 +48,26 @@ async def parse_file_task(
         await storage.download_file(bucket=config.storage.BUCKET_NAME, key=attachment_id, path=tmp_path)
 
         parsed_data = parse(tmp_path, filename, True, "tiny")  # TODO: сделать выбор модели
-        print(parsed_data)
+        await chat_service.save_parsed_file_async(parsed_data["text"], attachment_id)
 
-        # TODO: складывать результат парсинга в БД/S3
         await redis_client.publish(
             channel,
-            create_status_message(ParsingStatus.SUCCESSFULLY_ENDED, attachment_id)
+            create_status_message(ParsingStatus.SUCCESS, attachment_id)
         )
 
     except ExtractorNotFound:
         print(f"Cannot parse file with such extension: {filename}")
+        await chat_service.change_attachment_parsing_status_async(attachment_id, ParsingStatus.FAILED)
         await redis_client.publish(
             channel,
             create_status_message(ParsingStatus.FAILED, attachment_id)
         )
+        await chat_service.change_attachment_parsing_status_async(attachment_id, ParsingStatus.FAILED)
     except Exception as exc:
         # TODO: logging
         print(exc.with_traceback(exc.__traceback__))
+
+        await chat_service.change_attachment_parsing_status_async(attachment_id, ParsingStatus.FAILED)
         await redis_client.publish(
             channel,
             create_status_message(ParsingStatus.FAILED, attachment_id)

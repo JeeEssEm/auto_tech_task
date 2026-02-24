@@ -187,3 +187,7 @@ class StorageWorker:
     async def download_file(self, bucket: str, key: str, path: str):
         async with self._get_client() as client:
             await client.download_file(Bucket=bucket, Key=key, Filename=path)
+
+    async def load_text(self, bucket: str, key: str, text: str):
+        async with self._get_client() as client:
+            await client.put_object(Bucket=bucket, Key=key, Body=text, ContentType="text/plain")
