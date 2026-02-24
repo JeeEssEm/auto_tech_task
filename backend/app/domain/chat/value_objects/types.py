@@ -12,3 +12,9 @@ class ChatTemplate(enum.StrEnum):
 class MessageSender(enum.StrEnum):
     USER = "user"
     LLM = "LLM"
+
+
+class EventTypes(enum.StrEnum):
+    LLM_ANSWER = "LLM_ANSWER"
+    GENERATION_STATUS = "GENERATION_STATUS"
+    ERROR = "ERROR"

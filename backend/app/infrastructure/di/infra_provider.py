@@ -3,10 +3,7 @@ from typing import AsyncIterable
 from taskiq import AsyncBroker
 from dishka import Provider, provide, Scope, from_context
 from prisma import Prisma
-from fastapi import Request
-
-from backend.app.domain.user.entities import User
-from backend.app.domain.user.value_objects.roles import UserRoles
+import redis.asyncio as aredis
 
 from backend.app.infrastructure.config import AppSettings
 from backend.app.infrastructure.persistent.user import UserRepository
@@ -34,11 +31,11 @@ class InfraProvider(Provider):
         yield client
         await client.disconnect()
 
-    @provide(scope=Scope.REQUEST)
+    @provide(scope=Scope.SESSION)
     async def get_user_repository(self, db: Prisma) -> UserRepository:
         return UserRepository(db)
 
-    @provide(scope=Scope.REQUEST)
+    @provide(scope=Scope.SESSION)
     async def get_user_service(self, repo: UserRepository) -> UserService:
         return UserService(repo, self._config)
 
@@ -46,14 +43,20 @@ class InfraProvider(Provider):
     def provide_s3_storage_worker(self, config: AppSettings) -> StorageWorker:
         return StorageWorker(config)
 
-    @provide(scope=Scope.REQUEST)
+    @provide(scope=Scope.SESSION)
     def provide_chat_repository(self, db: Prisma) -> ChatRepository:
         return ChatRepository(db)
 
-    @provide(scope=Scope.REQUEST)
+    @provide(scope=Scope.SESSION)
     def provide_chat_service(self, repo: ChatRepository, storage: StorageWorker, config: AppSettings) -> ChatService:
         return ChatService(repo, storage, config)
 
     @provide(scope=Scope.APP)
     def provide_taskiq_broker(self) -> AsyncBroker:
         return broker
+
+    @provide(scope=Scope.APP)
+    async def provide_redis_client(self, config: AppSettings) -> AsyncIterable[aredis.Redis]:
+        client = aredis.from_url(config.redis.connection_url)
+        yield client
+        await client.aclose()
