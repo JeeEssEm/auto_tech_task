@@ -73,7 +73,7 @@ class UniversalParser:
     def _get_extractor(self, file_ext: str):
         # Если формат не знаем, по умолчанию парсим как текстовый файл
 
-        extractor = self.extractors.get(file_ext, TextExtractor())
+        extractor = self.extractors.get(file_ext)
         if not extractor:
             raise ExtractorNotFound()
 

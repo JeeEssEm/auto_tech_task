@@ -1,23 +1,34 @@
-import uuid
+﻿import uuid
+
+import structlog
 from typing import AsyncGenerator
 
 from prisma.models import ParsedAttachment
 
+from backend.app.domain.ports import TaskDispatcher
 from backend.app.infrastructure.persistent.chat import ChatRepository
 from backend.app.infrastructure.storage import StorageWorker
 from backend.app.infrastructure.config import AppSettings
 
-from backend.app.web.exceptions import CannotCreateEmptyChat, AttachmentNotFound, ChatNotFound, NotEnoughPermissions
+from backend.app.web.exceptions import CannotCreateEmptyChat, AttachmentNotFound, ChatNotFound, NotEnoughPermissions, AttachmentOwnershipError
 from backend.app.web.schemas.chat import SmallChat, Message as MessageSchema, Attachment
 from backend.app.domain.chat.value_objects.types import ChatTemplate, MessageSender, ParsingStatus
 
+logger = structlog.get_logger(__name__)
 
 
 class ChatService:
-    def __init__(self, repo: ChatRepository, storage: StorageWorker, config: AppSettings):
+    def __init__(
+        self,
+        repo: ChatRepository,
+        storage: StorageWorker,
+        config: AppSettings,
+        dispatcher: TaskDispatcher,
+    ):
         self._chat_repo = repo
         self._storage = storage
         self._bucket_name = config.storage.BUCKET_NAME
+        self._dispatcher = dispatcher
 
     async def get_messages_async(self, user_id: int, chat_id: int) -> list[MessageSchema]:
         if await self._chat_repo.check_user_has_chat_async(user_id, chat_id):
@@ -57,7 +68,7 @@ class ChatService:
             stream=file_stream,
             content_type=content_type
         )
-        # не делаем запись, если не смогли загрузить файл в S3
+
         try:
             await self._chat_repo.create_orphan_attachment_async(
                 file_id=attachment_id,
@@ -67,13 +78,23 @@ class ChatService:
                 user_id=user_id
             )
 
-            # пришлось накостылить из-за круговых импортов питона
-            from backend.worker.tasks.parse_file import parse_file_task
-            await parse_file_task.kiq(user_id=user_id, attachment_id=attachment_id, filename=filename)
+            await self._dispatcher.dispatch_parse_file(
+                user_id=user_id, attachment_id=attachment_id, filename=filename
+            )
 
+            logger.info(
+                "attachment_uploaded",
+                user_id=user_id,
+                attachment_id=attachment_id,
+                filename=filename,
+                size=actual_size,
+            )
             return attachment_id
-        except Exception as e:
-            # TODO: добавить логгирование
+        except Exception:
+            logger.exception(
+                "attachment_upload_rollback",
+                attachment_id=attachment_id,
+            )
             await self._storage.remove_object(bucket=self._bucket_name, key=attachment_id)
             raise
 
@@ -88,13 +109,14 @@ class ChatService:
         if len(attachment_ids) == 0 and not init_message:
             raise CannotCreateEmptyChat()
 
-        # TODO: проверка, что все attachment_id есть в бд
-        # TODO: проверка, что все attachment_id принадлежат ЭТОМУ юзеру
+        if attachment_ids and not await self._chat_repo.check_all_attachments_belong_to_user_async(owner_id, attachment_ids):
+            raise AttachmentOwnershipError()
 
         chat = await self._chat_repo.create_chat_async(owner_id, chat_name, chat_template=template_type)
         message = await self._chat_repo.create_message_async(chat_id=chat.id, text=init_message, is_user_sender=True)
         await self._chat_repo.add_attachments_to_message_async(attachment_ids, message.id)
 
+        logger.info("chat_created", chat_id=chat.id, owner_id=owner_id, template=template_type)
         return chat.id
 
     async def get_user_chats_async(self, user_id: int, page: int, limit: int) -> list[SmallChat]:
@@ -104,18 +126,20 @@ class ChatService:
     async def create_message_async(
             self, user_id: int, chat_id: int, text: str | None, attachment_ids: list[str]
     ) -> MessageSchema:
-        # TODO: проверить существование attachment_id и их принадлежность к юзеру
         if not await self._chat_repo.check_user_has_chat_async(user_id, chat_id):
             raise ChatNotFound(chat_id)
+
+        if attachment_ids and not await self._chat_repo.check_all_attachments_belong_to_user_async(user_id, attachment_ids):
+            raise AttachmentOwnershipError()
 
         message = await self._chat_repo.create_message_async(chat_id, text, is_user_sender=True)
         await self._chat_repo.add_attachments_to_message_async(attachment_ids, message.id)
         attachments = await self._chat_repo.get_attachments_async(attachment_ids)
 
         if text:
-            # пришлось накостылить из-за круговых импортов питона
-            from backend.worker.tasks.stupid_answer_task import generate_tz_task
-            await generate_tz_task.kiq(chat_id=chat_id, user_id=user_id, prompt=text)
+            await self._dispatcher.dispatch_generate_tz(
+                chat_id=chat_id, user_id=user_id, prompt=text
+            )
 
         return MessageSchema(
             id=message.id,
@@ -136,6 +160,8 @@ class ChatService:
 
         await self._chat_repo.change_attachment_parsing_status_async(ParsingStatus.SUCCESS, attachment_id)
         await self._chat_repo.create_parsed_attachment(parsed_attachment_id, attachment_id)
+
+        logger.info("parsed_file_saved", attachment_id=attachment_id, parsed_id=parsed_attachment_id)
 
     async def change_attachment_parsing_status_async(
             self, attachment_id: str, status: ParsingStatus

@@ -1,4 +1,4 @@
-from prisma import Prisma
+﻿from prisma import Prisma
 from prisma.models import Chat, Message, Attachment, ParsedAttachment
 from prisma.types import (
     ChatWhereInput, ChatCreateInput, MessageCreateInput, AttachmentCreateInput, ChatWhereInput,
@@ -112,6 +112,19 @@ class ChatRepository:
                 }
             }
         )
+
+    async def check_all_attachments_belong_to_user_async(
+            self, user_id: int, attachment_ids: list[str]
+    ) -> bool:
+        if not attachment_ids:
+            return True
+        count = await self._db.attachment.count(
+            where=AttachmentWhereInput(
+                id={"in": attachment_ids},
+                owner_id=user_id,
+            )
+        )
+        return count == len(attachment_ids)
 
     async def change_attachment_parsing_status_async(
             self, status: ParsingStatus, attachment_id: str

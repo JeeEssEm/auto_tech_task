@@ -1,4 +1,4 @@
-import os
+﻿import os
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -72,6 +72,7 @@ class AppSettings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
     debug: bool = True
+    cors_origins: list[str] = ["http://localhost:5173"]
     uvicorn: UvicornSettings = UvicornSettings()
     auth: AuthSettings = AuthSettings()
     rabbitmq: RabbitMqSettings = RabbitMqSettings()

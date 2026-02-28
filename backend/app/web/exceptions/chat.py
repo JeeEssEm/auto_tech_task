@@ -1,4 +1,4 @@
-from fastapi import status
+﻿from fastapi import status
 
 from backend.app.web.exceptions.base_exception import BaseWebException
 
@@ -11,7 +11,7 @@ class AttachmentFileIsTooBig(BaseWebException):
             detail={
                 "max_size": max_size
             },
-            http_code=status.HTTP_404_NOT_FOUND
+            http_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE
         )
 
 
@@ -21,6 +21,15 @@ class AttachmentNotFound(BaseWebException):
             code="CHAT_ATTACHMENT_DOES_NOT_EXIST",
             message=f"Attachment with id=`{attachment_id}` not found",
             http_code=status.HTTP_404_NOT_FOUND
+        )
+
+
+class AttachmentOwnershipError(BaseWebException):
+    def __init__(self):
+        super().__init__(
+            code="CHAT_ATTACHMENT_OWNERSHIP_ERROR",
+            message="One or more attachments do not exist or do not belong to you",
+            http_code=status.HTTP_403_FORBIDDEN
         )
 
 

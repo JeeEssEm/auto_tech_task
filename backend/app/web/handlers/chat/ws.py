@@ -1,6 +1,7 @@
-import asyncio
+﻿import asyncio
 import json
 
+import structlog
 from fastapi import APIRouter
 from fastapi.websockets import WebSocket, WebSocketDisconnect
 
@@ -13,6 +14,7 @@ from backend.app.domain.chat.value_objects.types import EventType
 from backend.app.infrastructure.persistent.user import UserRepository
 from backend.app.infrastructure.utils.channels import get_channel_name
 
+logger = structlog.get_logger(__name__)
 
 router = APIRouter(prefix="/chat", tags=["chat", "websocket"])
 
@@ -28,10 +30,10 @@ async def task_status_listener(pubsub: redis.client.PubSub, websocket: WebSocket
                     await websocket.send_json(data)
 
                 case EventType.GENERATION_STATUS:
-                    pass
+                    await websocket.send_json(data)
 
                 case EventType.PARSING_STATUS:
-                    print(data) # TODO: убрать нафиг
+                    logger.debug("ws_parsing_status_event", data=data)
                     await websocket.send_json(data)
     except asyncio.CancelledError:
         pass
@@ -53,6 +55,7 @@ async def update_chat_state(
 
     user = await user_repo.get_user_by_session_id_async(session_id)
     if not user:
+        logger.warning("ws_auth_failed", session_id=session_id[:8] + "...")
         await websocket.close(code=1008, reason="Unauthorized")
         return
 
@@ -61,12 +64,18 @@ async def update_chat_state(
     await pubsub.subscribe(channel_name)
     listener_task = asyncio.create_task(task_status_listener(pubsub, websocket))
 
+    logger.info("ws_connected", user_id=user.id, channel=channel_name)
+
     try:
         while True:
             await websocket.receive_text()
     except WebSocketDisconnect:
-        pass
+        logger.info("ws_disconnected", user_id=user.id)
     finally:
         listener_task.cancel()
+        try:
+            await listener_task
+        except asyncio.CancelledError:
+            pass
         await pubsub.unsubscribe(channel_name)
         await pubsub.close()

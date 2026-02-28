@@ -1,4 +1,4 @@
-from pydantic import BaseModel, EmailStr, Field, field_validator
+﻿from pydantic import BaseModel, EmailStr, Field, field_validator
 from pydantic_core.core_schema import ValidationInfo
 
 from backend.app.domain.user import User
@@ -32,7 +32,8 @@ class SignupUser(BaseModel):
     @field_validator("password_confirm", mode="after")
     @classmethod
     def check_passwords_match(cls, value: str, info: ValidationInfo) -> str:
-        if value != info.data["password"]:
+        password = info.data.get("password")
+        if password is not None and value != password:
             raise ValueError("Passwords do not match")
         return value
 

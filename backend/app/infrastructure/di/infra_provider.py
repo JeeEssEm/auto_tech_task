@@ -1,10 +1,12 @@
-from typing import AsyncIterable
+﻿from typing import AsyncIterable
 
 from taskiq import AsyncBroker
-from dishka import Provider, provide, Scope, from_context
+from dishka import Provider, provide, Scope
 from prisma import Prisma
 import redis.asyncio as aredis
 
+from backend.app.domain.ports import TaskDispatcher
+from backend.app.infrastructure.task_dispatcher import TaskiqDispatcher
 from backend.app.infrastructure.config import AppSettings
 from backend.app.infrastructure.persistent.user import UserRepository
 from backend.app.infrastructure.persistent.chat import ChatRepository
@@ -40,16 +42,23 @@ class InfraProvider(Provider):
         return UserService(repo, self._config)
 
     @provide(scope=Scope.APP)
-    def provide_s3_storage_worker(self, config: AppSettings) -> StorageWorker:
-        return StorageWorker(config)
+    async def provide_s3_storage_worker(self, config: AppSettings) -> AsyncIterable[StorageWorker]:
+        storage = StorageWorker(config)
+        await storage.start()
+        yield storage
+        await storage.stop()
 
     @provide(scope=Scope.SESSION)
     def provide_chat_repository(self, db: Prisma) -> ChatRepository:
         return ChatRepository(db)
 
     @provide(scope=Scope.SESSION)
-    def provide_chat_service(self, repo: ChatRepository, storage: StorageWorker, config: AppSettings) -> ChatService:
-        return ChatService(repo, storage, config)
+    def provide_task_dispatcher(self) -> TaskDispatcher:
+        return TaskiqDispatcher()
+
+    @provide(scope=Scope.SESSION)
+    def provide_chat_service(self, repo: ChatRepository, storage: StorageWorker, task_dispatcher: TaskDispatcher, config: AppSettings) -> ChatService:
+        return ChatService(repo, storage, config, task_dispatcher)
 
     @provide(scope=Scope.APP)
     def provide_taskiq_broker(self) -> AsyncBroker:

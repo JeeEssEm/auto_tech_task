@@ -1,10 +1,11 @@
-import datetime
+﻿import datetime
 
 from prisma import Prisma
 from prisma.models import User
 from prisma.types import (
     UserCreateInput, UserWhereInput, UserWhereInputRecursive1,
-    SessionWhereInput, SessionWhereUniqueInput, SessionInclude, SessionCreateInput
+    SessionWhereInput, SessionWhereUniqueInput, SessionInclude, SessionCreateInput,
+    DateTimeFilter
 )
 
 from backend.app.domain.user import User as DomainUser
@@ -48,8 +49,12 @@ class UserRepository:
         return user
 
     async def get_user_by_session_id_async(self, session_id: str) -> User | None:
+        now = datetime.datetime.now(datetime.timezone.utc)
         session = await self._db.session.find_first(
-            where=SessionWhereInput(id=session_id),
+            where=SessionWhereInput(
+                id=session_id,
+                expires_at=DateTimeFilter(gt=now),
+            ),
             include=SessionInclude(user=True)
         )
         if not session:
