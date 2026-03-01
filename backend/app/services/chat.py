@@ -9,10 +9,11 @@ from backend.app.domain.ports import TaskDispatcher
 from backend.app.infrastructure.persistent.chat import ChatRepository
 from backend.app.infrastructure.storage import StorageWorker
 from backend.app.infrastructure.config import AppSettings
+from backend.app.services.quota import QuotaService
 
 from backend.app.web.exceptions import CannotCreateEmptyChat, AttachmentNotFound, ChatNotFound, NotEnoughPermissions, AttachmentOwnershipError
 from backend.app.web.schemas.chat import SmallChat, Message as MessageSchema, Attachment
-from backend.app.domain.chat.value_objects.types import ChatTemplate, MessageSender, ParsingStatus
+from backend.app.domain.chat.value_objects.types import ChatTemplate, MessageSender, ParsingStatus, UsageAction
 
 logger = structlog.get_logger(__name__)
 
@@ -24,11 +25,13 @@ class ChatService:
         storage: StorageWorker,
         config: AppSettings,
         dispatcher: TaskDispatcher,
+        quota: QuotaService,
     ):
         self._chat_repo = repo
         self._storage = storage
         self._bucket_name = config.storage.BUCKET_NAME
         self._dispatcher = dispatcher
+        self._quota = quota
 
     async def get_messages_async(self, user_id: int, chat_id: int) -> list[MessageSchema]:
         if await self._chat_repo.check_user_has_chat_async(user_id, chat_id):
@@ -60,6 +63,8 @@ class ChatService:
     async def upload_attachment(
             self, user_id: int, content_type: str, filename: str, file_stream: AsyncGenerator[bytes, None]
     ):
+        await self._quota.check_and_record_async(user_id, UsageAction.PARSE_FILE)
+
         attachment_id = str(uuid.uuid4().hex)
 
         etag, actual_size = await self._storage.upload_stream(
@@ -109,6 +114,8 @@ class ChatService:
         if len(attachment_ids) == 0 and not init_message:
             raise CannotCreateEmptyChat()
 
+        await self._quota.check_and_record_async(owner_id, UsageAction.CREATE_CHAT)
+
         if attachment_ids and not await self._chat_repo.check_all_attachments_belong_to_user_async(owner_id, attachment_ids):
             raise AttachmentOwnershipError()
 
@@ -137,6 +144,7 @@ class ChatService:
         attachments = await self._chat_repo.get_attachments_async(attachment_ids)
 
         if text:
+            await self._quota.check_and_record_async(user_id, UsageAction.GENERATE_TZ)
             await self._dispatcher.dispatch_generate_tz(
                 chat_id=chat_id, user_id=user_id, prompt=text
             )

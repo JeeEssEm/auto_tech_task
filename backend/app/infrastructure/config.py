@@ -21,9 +21,8 @@ class AuthSettings(BaseSettings):
 class RedisSettings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="REDIS_")
 
-    PASSWORD: str = "chage_me_in_prod"
-    USER: str = "some_user"
-    USER_PASSWORD: str = "naaah_change_me"
+    USER: str
+    PASSWORD: str
     HOST: str = "localhost"
     PORT: int = 6379
 
@@ -35,8 +34,8 @@ class RedisSettings(BaseSettings):
 class RabbitMqSettings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="RABBITMQ_")
 
-    DEFAULT_USER: str = "non_default_user"
-    DEFAULT_PASS: str = "non_default_pass"
+    DEFAULT_USER: str
+    DEFAULT_PASS: str
 
     HOST: str = "localhost"
     PORT: int = 5672
@@ -57,8 +56,8 @@ class StorageSettings(BaseSettings):
     HOST: str = "localhost"
     PORT: int = 8333
 
-    ACCESS_KEY: str = "change-me-in-prod"
-    SECRET_KEY: str = "definitely-change-me-in-prod"
+    ACCESS_KEY: str
+    SECRET_KEY: str
 
     REGION: str = ""
     BUCKET_NAME: str = "user-files"
@@ -66,6 +65,18 @@ class StorageSettings(BaseSettings):
     @property
     def connection_url(self) -> str:
         return f"http://{self.HOST}:{self.PORT}"
+
+
+class QuotaSettings(BaseSettings):
+    model_config = SettingsConfigDict(env_prefix="QUOTA_")
+
+    free_daily_messages: int = 10
+    free_daily_uploads: int = 5
+    free_max_chats: int = 3
+
+    pro_daily_messages: int = 100
+    pro_daily_uploads: int = 50
+    pro_max_chats: int = -1  # -1 = unlimited
 
 
 class AppSettings(BaseSettings):
@@ -79,3 +90,4 @@ class AppSettings(BaseSettings):
     redis: RedisSettings = RedisSettings()
     task_queue: TaskQueueSettings = TaskQueueSettings()
     storage: StorageSettings = StorageSettings()
+    quota: QuotaSettings = QuotaSettings()

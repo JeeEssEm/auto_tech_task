@@ -1,4 +1,4 @@
-import enum
+﻿import enum
 
 
 class ChatTemplate(enum.StrEnum):
@@ -33,3 +33,15 @@ class GenerationStatus(enum.StrEnum):
     BUILDING_GRAPH = "BUILDING_GRAPH"
     MERGING_DATA_SOURCES = "MERGING_DATA_SOURCES"
     VERIFYING_DATA = "VERIFYING_DATA"
+
+
+class SubscriptionTier(enum.StrEnum):
+    FREE = "free"
+    PRO = "pro"
+    ENTERPRISE = "enterprise"
+
+
+class UsageAction(enum.StrEnum):
+    GENERATE_TZ = "generate_tz"
+    PARSE_FILE = "parse_file"
+    CREATE_CHAT = "create_chat"

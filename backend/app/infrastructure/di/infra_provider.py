@@ -12,6 +12,7 @@ from backend.app.infrastructure.persistent.user import UserRepository
 from backend.app.infrastructure.persistent.chat import ChatRepository
 from backend.app.infrastructure.storage import StorageWorker
 from backend.app.services import ChatService
+from backend.app.services.quota import QuotaService
 
 from backend.app.services.user import UserService
 from backend.worker.broker import broker
@@ -57,8 +58,16 @@ class InfraProvider(Provider):
         return TaskiqDispatcher()
 
     @provide(scope=Scope.SESSION)
-    def provide_chat_service(self, repo: ChatRepository, storage: StorageWorker, task_dispatcher: TaskDispatcher, config: AppSettings) -> ChatService:
-        return ChatService(repo, storage, config, task_dispatcher)
+    def provide_quota_service(self, repo: UserRepository, config: AppSettings) -> QuotaService:
+        return QuotaService(repo, config)
+
+    @provide(scope=Scope.SESSION)
+    def provide_chat_service(
+            self, repo: ChatRepository, storage: StorageWorker,
+            task_dispatcher: TaskDispatcher, config: AppSettings,
+            quota: QuotaService
+    ) -> ChatService:
+        return ChatService(repo, storage, config, task_dispatcher, quota)
 
     @provide(scope=Scope.APP)
     def provide_taskiq_broker(self) -> AsyncBroker:
