@@ -117,7 +117,11 @@ export function ChatPage() {
     toast.success("Экспорт готов!", {
       action: {
         label: "Скачать",
-        onClick: () => tzApi.downloadExport(String(data.chat_id), data.export_key),
+        onClick: () => {
+          tzApi.downloadExport(String(data.chat_id), data.export_key).catch(() => {
+            toast.error("Ошибка скачивания файла")
+          })
+        },
       },
       duration: 10000,
     })

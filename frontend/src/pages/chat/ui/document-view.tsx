@@ -365,7 +365,24 @@ export function DocumentView({ chatId, generations, selected, onSelect, content,
                     {saving ? <Loader2 className="size-3.5 animate-spin" /> : "Сохранить"}
                   </Button>
                 )}
-                {!activeSub && (sectionFilled ? (
+                {activeSub ? (
+                  <div className="relative">
+                    <Button variant="ghost" size="sm" className="h-7 text-xs gap-1.5" disabled={customLoading} onClick={() => setCustomOpen(o => !o)}>
+                      {customLoading ? <Loader2 className="size-3.5 animate-spin" /> : <Sparkles className="size-3.5" />}
+                      Сгенерировать
+                    </Button>
+                    {customOpen && (
+                      <div className="absolute right-0 top-full mt-1 z-10 rounded-md border bg-popover p-3 shadow-md w-[280px] space-y-2">
+                        <p className="text-xs text-muted-foreground">Тема для генерации:</p>
+                        <textarea className="w-full rounded-md border bg-background px-2 py-1.5 text-xs resize-none focus:outline-none focus:ring-1 focus:ring-ring" rows={2} placeholder="Например: Требования к анимациям…" value={customTopic} onChange={e => setCustomTopic(e.target.value)} onKeyDown={e => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); handleGenerateCustom() } if (e.key === "Escape") setCustomOpen(false) }} autoFocus />
+                        <div className="flex gap-1.5 justify-end">
+                          <Button variant="ghost" size="sm" className="h-6 text-xs" onClick={() => setCustomOpen(false)}>Отмена</Button>
+                          <Button size="sm" className="h-6 text-xs" disabled={!customTopic.trim()} onClick={handleGenerateCustom}>Сгенерировать</Button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                ) : (sectionFilled ? (
                   <div className="relative">
                     <Button variant="ghost" size="sm" className="h-7 text-xs gap-1.5" disabled={regenLoading} onClick={() => setRegenOpen(o => !o)}>
                       {regenLoading ? <Loader2 className="size-3.5 animate-spin" /> : <RefreshCw className="size-3.5" />}

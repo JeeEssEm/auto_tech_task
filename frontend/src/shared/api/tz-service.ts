@@ -1,5 +1,4 @@
 ﻿import { apiClient } from "@/shared/api/client"
-import { API_URL } from "@/shared/config/backend"
 
 export const tzApi = {
   /** Запуск полного пайплайна первичной генерации */
@@ -85,14 +84,21 @@ export const tzApi = {
   },
 
   /** Скачивание экспортированного файла */
-  downloadExport: (chatId: string, exportKey: string) => {
-    const url = `${API_URL}/tz/${chatId}/export-download?${new URLSearchParams({ key: exportKey })}`
+  downloadExport: async (chatId: string, exportKey: string) => {
+    const endpoint = `/tz/${chatId}/export-download?${new URLSearchParams({ key: exportKey })}`
+    const blob = await apiClient.downloadBlob(endpoint)
+    const filename = exportKey.split("/").pop() ?? "export"
+
+    const url = URL.createObjectURL(blob)
     const a = document.createElement("a")
     a.style.display = "none"
     a.href = url
-    a.download = exportKey.split("/").pop() ?? "export"
+    a.download = filename
     document.body.appendChild(a)
     a.click()
-    setTimeout(() => document.body.removeChild(a), 100)
+    setTimeout(() => {
+      document.body.removeChild(a)
+      URL.revokeObjectURL(url)
+    }, 100)
   },
 }

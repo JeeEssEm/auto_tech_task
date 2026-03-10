@@ -29,6 +29,10 @@ from backend.worker.modules.machine_learning.interface import (
     ProgressNotifier,
 )
 from backend.worker.modules.machine_learning.mock_adapter import MockITZPipelineAdapter
+from backend.worker.modules.machine_learning.schemas.enums import TemplateType
+from backend.worker.modules.machine_learning.templates import get_template_class
+from backend.worker.modules.export.renderer import TemplateMarkdownRenderer
+from backend.worker.modules.export.exporters import get_exporter
 
 logger = structlog.get_logger(__name__)
 
@@ -465,8 +469,49 @@ async def generate_custom_block_task(
 
 
 # ---------------------------------------------------------------------------
-# 5. Экспорт ТЗ (заглушка)
+# 5. Экспорт ТЗ
 # ---------------------------------------------------------------------------
+
+
+def _append_custom_sections(
+    master_markdown: str,
+    custom_sections: dict[str, list[dict[str, Any]]],
+) -> str:
+    """Добавляет пользовательские подпункты к Master Markdown."""
+    lines = [master_markdown.rstrip()]
+
+    for _section_key, nodes in custom_sections.items():
+        if not nodes:
+            continue
+        for node in nodes:
+            _render_custom_node(node, level=3, lines=lines)
+
+    return "\n".join(lines)
+
+
+def _render_custom_node(
+    node: dict[str, Any],
+    level: int,
+    lines: list[str],
+) -> None:
+    title = node.get("title", "").strip()
+    content = node.get("content", "").strip()
+    children = node.get("children", [])
+
+    if not title and not content and not children:
+        return
+
+    heading = "#" * min(level, 6)
+    if title:
+        lines.append("")
+        lines.append(f"{heading} {title}")
+        lines.append("")
+    if content:
+        lines.append(content)
+        lines.append("")
+    for child in children:
+        _render_custom_node(child, level + 1, lines)
+
 
 @broker.task(task_name="export_tz")
 @inject
@@ -480,10 +525,14 @@ async def export_tz_task(
     config: FromDishka[AppSettings] = None,  # type: ignore[assignment]
 ) -> None:
     """
-    Экспорт ТЗ в файл (заглушка).
+    Экспорт ТЗ в файл (markdown, word, pdf).
 
-    Поддерживаемые форматы: markdown, word, pdf.
-    Сейчас: markdown — JSON-содержимое, word/pdf — текстовая заглушка.
+    Алгоритм:
+      1. Загружает JSON-результат из S3.
+      2. Восстанавливает Pydantic-модель шаблона через ``TEMPLATE_REGISTRY``.
+      3. Рендерит «Master Markdown» через ``TemplateMarkdownRenderer``.
+      4. Передаёт Markdown в соответствующий ``ITzExporter`` (Strategy).
+      5. Загружает готовый файл в S3 и публикует ``EXPORT_READY``.
     """
     channel_name = get_channel_name(user_id)
     log = logger.bind(chat_id=chat_id, user_id=user_id, export_format=export_format)
@@ -491,31 +540,47 @@ async def export_tz_task(
     try:
         log.info("export_tz_started")
 
+        # 1. Загружаем JSON из S3
         content_text = await storage.get_text(config.storage.BUCKET_NAME, result_key)
+        content = json.loads(content_text)
 
-        if export_format == "markdown":
-            export_data = content_text.encode("utf-8")
-            ext = "md"
-            content_type = "text/markdown"
-        elif export_format == "word":
-            export_data = f"[ЗАГЛУШКА] Экспорт в Word для {result_key}\n\n{content_text}".encode("utf-8")
-            ext = "docx"
-            content_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-        elif export_format == "pdf":
-            export_data = f"[ЗАГЛУШКА] Экспорт в PDF для {result_key}\n\n{content_text}".encode("utf-8")
-            ext = "pdf"
-            content_type = "application/pdf"
-        else:
-            raise ValueError(f"Unsupported export format: {export_format}")
+        # 2. Восстанавливаем Pydantic-модель
+        template_type_str = content.get("template_type", "")
+        document_data = content.get("document", {})
+        custom_sections = content.get("custom_sections", {})
 
+        template_type = TemplateType(template_type_str)
+        template_class = get_template_class(template_type)
+
+        # 3. Рендерим Master Markdown
+        renderer = TemplateMarkdownRenderer()
+        try:
+            template = template_class.model_validate(document_data)
+            master_markdown = renderer.render(template)
+        except Exception:
+            # После ручного редактирования (manual-edit) поля могут быть
+            # заменены на plain-строки — model_validate упадёт.
+            # Используем dict-рендерер как fallback.
+            log.info("model_validate_failed_using_dict_renderer")
+            master_markdown = renderer.render_from_data(document_data, template_class)
+
+        # Добавляем пользовательские подпункты в конец каждого раздела
+        if custom_sections:
+            master_markdown = _append_custom_sections(master_markdown, custom_sections)
+
+        # 4. Экспортируем через стратегию
+        exporter = get_exporter(export_format)
+        export_data = await exporter.export(master_markdown)
+
+        # 5. Сохраняем в S3
         base_name = result_key.rsplit("/", 1)[-1].replace(".json", "")
-        export_key = f"exports/{chat_id}/{base_name}.{ext}"
+        export_key = f"exports/{chat_id}/{base_name}.{exporter.file_extension}"
 
         await storage.put_object(
             bucket=config.storage.BUCKET_NAME,
             key=export_key,
             data=export_data,
-            content_type=content_type,
+            content_type=exporter.content_type,
         )
 
         await redis_client.publish(
