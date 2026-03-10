@@ -1,10 +1,15 @@
+﻿import json
+
 from fastapi import APIRouter, Request, HTTPException, Header
 from fastapi.responses import StreamingResponse
 
 from dishka.integrations.fastapi import FromDishka, DishkaRoute
 
 from backend.app.domain.user import User
+from backend.app.infrastructure.config import AppSettings
+from backend.app.infrastructure.persistent.chat import ChatRepository
 from backend.app.infrastructure.persistent.user import UserRepository
+from backend.app.infrastructure.persistent.generation import GenerationRepository
 from backend.app.services import ChatService
 from backend.app.infrastructure.storage import StorageWorker
 from backend.app.web.exceptions import AttachmentFieldIsMissing
@@ -41,31 +46,6 @@ async def get_user_chats(
     return await chat_service.get_user_chats_async(user.id, page, limit)
 
 
-@router.post("/{chat_id}/messages")
-async def create_message(
-        chat_id: int,
-        form_data: CreateMessage,
-        user: FromDishka[AuthenticatedUser],
-        chat_service: FromDishka[ChatService]
-) -> Message:
-    return await chat_service.create_message_async(
-        user_id=user.id,
-        chat_id=chat_id,
-        text=form_data.text,
-        attachment_ids=form_data.attachment_ids
-    )
-
-
-@router.get("/{chat_id}/messages")
-async def get_chat_messages(
-        chat_id: int,
-        user: FromDishka[AuthenticatedUser],
-        chat_service: FromDishka[ChatService]
-) -> list[Message]:
-    # TODO: добавить пагинацию
-    return await chat_service.get_messages_async(user_id=user.id, chat_id=chat_id)
-
-
 @router.post("/files/upload")
 async def upload_file(
         file_name: str,
@@ -99,3 +79,37 @@ async def get_file(
             "ETag": meta["etag"],
         },
     )
+
+
+@router.get("/{chat_id}/parsed-files")
+async def get_parsed_files(
+        chat_id: int,
+        user: FromDishka[AuthenticatedUser],
+        chat_service: FromDishka[ChatService],
+):
+    return await chat_service.get_parsed_attachments_async(user.id, chat_id)
+
+
+@router.post("/{chat_id}/messages")
+async def create_message(
+        chat_id: int,
+        form_data: CreateMessage,
+        user: FromDishka[AuthenticatedUser],
+        chat_service: FromDishka[ChatService]
+) -> Message:
+    return await chat_service.create_message_async(
+        user_id=user.id,
+        chat_id=chat_id,
+        text=form_data.text,
+        attachment_ids=form_data.attachment_ids
+    )
+
+
+@router.get("/{chat_id}/messages")
+async def get_chat_messages(
+        chat_id: int,
+        user: FromDishka[AuthenticatedUser],
+        chat_service: FromDishka[ChatService]
+) -> list[Message]:
+    # TODO: добавить пагинацию
+    return await chat_service.get_messages_async(user_id=user.id, chat_id=chat_id)

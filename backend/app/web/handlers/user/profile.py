@@ -42,12 +42,12 @@ async def get_usage(
         tier=summary["tier"],
         today=TodayUsage(
             generate_tz=summary["today"].get(UsageAction.GENERATE_TZ, 0),
-            parse_file=summary["today"].get(UsageAction.PARSE_FILE, 0),
+            parsed_files=summary["today"].get(UsageAction.PARSE_FILE, 0),
         ),
         total_chats=summary["total_chats"],
         limits=UsageLimits(
             generate_tz=limits.get(UsageAction.GENERATE_TZ, 0),
-            parse_file=limits.get(UsageAction.PARSE_FILE, 0),
+            parse_files=limits.get(UsageAction.PARSE_FILE, 0),
             create_chat=limits.get(UsageAction.CREATE_CHAT, 0),
         ),
     )

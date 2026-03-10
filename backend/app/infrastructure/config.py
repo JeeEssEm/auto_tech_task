@@ -28,7 +28,8 @@ class RedisSettings(BaseSettings):
 
     @property
     def connection_url(self) -> str:
-        return f"redis://{self.USER}:{self.USER_PASSWORD}@{self.HOST}:{self.PORT}"
+        # return f"redis://{self.USER}:{self.USER_PASSWORD}@{self.HOST}:{self.PORT}"
+        return f"redis://{self.HOST}:{self.PORT}"
 
 
 class RabbitMqSettings(BaseSettings):

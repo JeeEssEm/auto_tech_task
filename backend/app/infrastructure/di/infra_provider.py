@@ -10,6 +10,7 @@ from backend.app.infrastructure.task_dispatcher import TaskiqDispatcher
 from backend.app.infrastructure.config import AppSettings
 from backend.app.infrastructure.persistent.user import UserRepository
 from backend.app.infrastructure.persistent.chat import ChatRepository
+from backend.app.infrastructure.persistent.generation import GenerationRepository
 from backend.app.infrastructure.storage import StorageWorker
 from backend.app.services import ChatService
 from backend.app.services.quota import QuotaService
@@ -52,6 +53,10 @@ class InfraProvider(Provider):
     @provide(scope=Scope.SESSION)
     def provide_chat_repository(self, db: Prisma) -> ChatRepository:
         return ChatRepository(db)
+
+    @provide(scope=Scope.SESSION)
+    def provide_generation_repository(self, db: Prisma) -> GenerationRepository:
+        return GenerationRepository(db)
 
     @provide(scope=Scope.SESSION)
     def provide_task_dispatcher(self) -> TaskDispatcher:

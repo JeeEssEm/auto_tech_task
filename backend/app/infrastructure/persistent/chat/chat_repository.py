@@ -138,3 +138,12 @@ class ChatRepository:
         return await self._db.parsedattachment.create(
             ParsedAttachmentCreateInput(id=parsed_attachment_id, raw_attachment_id=raw_attachment_id)
         )
+
+    async def get_chat_attachments_with_parsed_async(self, chat_id: int) -> list[Attachment]:
+        return await self._db.attachment.find_many(
+            where={
+                "message": {"is": {"chat_id": chat_id}},
+                "parsing_status": "SUCCESS",
+            },
+            include={"parsed_attachment": True}
+        )

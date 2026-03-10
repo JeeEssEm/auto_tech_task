@@ -18,6 +18,7 @@ class EventType(enum.StrEnum):
     LLM_ANSWER = "LLM_ANSWER"
     GENERATION_STATUS = "GENERATION_STATUS"
     PARSING_STATUS = "PARSING_STATUS"
+    EXPORT_READY = "EXPORT_READY"
     ERROR = "ERROR"
 
 
@@ -35,6 +36,14 @@ class GenerationStatus(enum.StrEnum):
     VERIFYING_DATA = "VERIFYING_DATA"
 
 
+class GenerationRunStatus(enum.StrEnum):
+    PENDING = "PENDING"
+    INGESTING = "INGESTING"
+    COMPILING = "COMPILING"
+    COMPLETED = "COMPLETED"
+    FAILED = "FAILED"
+
+
 class SubscriptionTier(enum.StrEnum):
     FREE = "free"
     PRO = "pro"
@@ -43,5 +52,5 @@ class SubscriptionTier(enum.StrEnum):
 
 class UsageAction(enum.StrEnum):
     GENERATE_TZ = "generate_tz"
-    PARSE_FILE = "parse_file"
+    PARSE_FILE = "parsed_files"
     CREATE_CHAT = "create_chat"

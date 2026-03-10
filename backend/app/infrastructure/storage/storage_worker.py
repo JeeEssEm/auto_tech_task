@@ -224,3 +224,11 @@ class StorageWorker:
             Bucket=bucket, Key=key, Body=text, ContentType="text/plain"
         )
         logger.debug("text_loaded", bucket=bucket, key=key, length=len(text))
+
+    async def get_text(self, bucket: str, key: str) -> str:
+        client = self._ensure_client()
+        response = await client.get_object(Bucket=bucket, Key=key)
+
+        async with response["Body"] as stream:
+            data = await stream.read()
+            return data.decode("utf-8")

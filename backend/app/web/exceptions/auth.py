@@ -1,4 +1,4 @@
-from fastapi import status
+﻿from fastapi import status
 
 from backend.app.web.exceptions.base_exception import BaseWebException
 

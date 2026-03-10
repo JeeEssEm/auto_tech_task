@@ -22,7 +22,7 @@ from backend.worker.modules.parser.universal_parser import parse
 logger = structlog.get_logger(__name__)
 
 
-@broker.task(task_name="parse_file")
+@broker.task(task_name="parsed_files")
 @inject
 async def parse_file_task(
         user_id: int,

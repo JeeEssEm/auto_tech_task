@@ -5,13 +5,15 @@ from backend.app.web.handlers.user.recovery import router as recovery_router
 from backend.app.web.handlers.user.profile import router as profile_router
 from backend.app.web.handlers.chat.chat import router as chat_router
 from backend.app.web.handlers.chat.ws import router as chat_websocket_router
+from backend.app.web.handlers.tz_generation.tz_generation import router as tz_generation_router
 
 routers = [
     auth_router,
     recovery_router,
     profile_router,
     chat_router,
-    chat_websocket_router
+    chat_websocket_router,
+    tz_generation_router,
 ]
 
 

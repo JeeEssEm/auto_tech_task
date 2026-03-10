@@ -175,3 +175,28 @@ class ChatService:
             self, attachment_id: str, status: ParsingStatus
     ) -> ParsedAttachment | None:
         return await self._chat_repo.change_attachment_parsing_status_async(status, attachment_id)
+
+    async def get_parsed_attachments_async(self, user_id: int, chat_id: int) -> list[dict]:
+        if not await self._chat_repo.check_user_has_chat_async(user_id, chat_id):
+            raise ChatNotFound(chat_id)
+
+        attachments = await self._chat_repo.get_chat_attachments_with_parsed_async(chat_id)
+        result = []
+        for att in attachments:
+            transcript = ""
+            if att.parsed_attachment:
+                try:
+                    text_bytes = b""
+                    async for chunk in self._storage.get_object_stream(self._bucket_name, att.parsed_attachment.id):
+                        text_bytes += chunk
+                    transcript = text_bytes.decode("utf-8")
+                except Exception as e:
+                    logger.warning("transcript_read_failed", attachment_id=att.id, error=str(e))
+            result.append({
+                "key": att.id,
+                "file_name": att.file_name,
+                "file_type": att.file_type,
+                "file_size": att.file_size,
+                "transcript": transcript,
+            })
+        return result
