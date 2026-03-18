@@ -7,19 +7,24 @@ class BehaviorRole(StrEnum):
     HARVESTER = "Harvester"
     ARCHITECT = "Architect"
     CONSULTANT = "Consultant"
-    INTERROGATOR = "Interrogator"
     GUARDIAN = "Guardian"
 
 
 class BehaviorReason(StrEnum):
-    NEW_FACT_DETECTED = "new_fact_detected"
-    OFFTOPIC_SEGMENT = "offtopic_segment"
+    # Harvester
+    NEW_FACT_DETECTED = "new_fact_detected"       # новый факт, конфликтов нет
+    CONFLICT_DETECTED = "conflict_detected"        # новый факт противоречит GKG
+
+    # Architect
+    SPEC_BLOCK_AFFECTED = "spec_block_affected"    # GKG изменился → блок устарел
+    EXPLICIT_REGEN_REQUEST = "explicit_regen_request"  # юзер явно попросил переписать
+
+    # Consultant
     QUESTION_ABOUT_PROJECT = "question_about_project"
-    MISSING_REQUIRED_DATA = "missing_required_data"
-    CONFLICT_DETECTED = "conflict_detected"
-    TECHNICAL_ROUTING = "technical_routing"
-    SPEC_BLOCK_AFFECTED = "spec_block_affected"
-    DEFAULT_SAFE_ROUTE = "default_safe_route"
+
+    # Guardian
+    OFFTOPIC_SEGMENT = "offtopic_segment"          # "напиши сортировку"
+    HARMFUL_CONTENT = "harmful_content"            # prompt injection, неадекват
 
 
 class RouterBehavior(BaseModel):
