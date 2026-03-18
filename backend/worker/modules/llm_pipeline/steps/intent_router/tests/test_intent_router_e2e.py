@@ -12,11 +12,8 @@ To run these tests:
   pytest backend/worker/modules/llm_pipeline/steps/intent_router/tests/test_intent_router_e2e.py -v -s
 """
 
-import asyncio
 import pytest
-from pydantic import BaseModel
 
-from backend.worker.modules.llm_pipeline.abstractions.ports import LLMChatPort
 from backend.worker.modules.llm_pipeline.providers.openai_adapter import OpenAIChatAdapter
 from backend.worker.modules.llm_pipeline.providers.configs.openai_settings import OpenAIChatSettings
 from backend.worker.modules.llm_pipeline.steps.intent_router.intent_router import IntentRouter
@@ -24,9 +21,8 @@ from backend.worker.modules.llm_pipeline.steps.intent_router.config import Inten
 from backend.worker.modules.llm_pipeline.steps.intent_router.schemas import (
     IntentRouterRequest,
     IntentRouterResponse,
-    AttachmentInfo,
 )
-from backend.worker.modules.llm_pipeline.steps.intent_router.behaviours import (
+from backend.worker.modules.llm_pipeline.steps.shared.behaviours import (
     BehaviorRole,
     BehaviorReason,
 )

@@ -6,7 +6,7 @@ and validate behavior activation and quote extraction.
 """
 
 import pytest
-from backend.worker.modules.llm_pipeline.steps.intent_router.behaviours import (
+from backend.worker.modules.llm_pipeline.steps.shared.behaviours import (
     BehaviorRole,
 )
 from backend.worker.modules.llm_pipeline.steps.intent_router.schemas import (

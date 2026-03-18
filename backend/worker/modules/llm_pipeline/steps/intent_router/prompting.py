@@ -1,7 +1,6 @@
 import json
 
 
-# Единственный источник истины для ролей и причин
 ROLES = ["Harvester", "Architect", "Consultant", "Interrogator", "Guardian"]
 
 REASONS = {
