@@ -1,7 +1,7 @@
 import json
 import re
 from datetime import datetime
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 from .base import BaseExtractor
 
 
@@ -57,35 +57,26 @@ class JsonExtractor(BaseExtractor):
         return has_author and has_text and has_time
 
     def _format_telegram_chat(self, data: Dict) -> str:
-        """Форматирует Telegram чат в удобный текстовый формат"""
-        lines = []
-        chat_name = data.get("name", "Без названия")
-        lines.append(f"=== ЧАТ: {chat_name} ===\n")
+        """Форматирует Telegram чат в компактный текстовый формат"""
+        normalized_messages: List[Dict[str, Any]] = []
 
         for msg in data.get("messages", []):
             if msg.get("type") != "message":
                 continue
 
-            from_name = msg.get("from", "Unknown")
-            date = msg.get("date", "")
-            
-            # Форматируем дату если она есть
-            formatted_date = self._format_date(date)
+            normalized_messages.append(
+                {
+                    "author": msg.get("from", "Unknown"),
+                    "timestamp": msg.get("date"),
+                    "text": self._extract_message_text(msg),
+                }
+            )
 
-            lines.append(f"[{formatted_date}] {from_name}:")
-
-            # Извлекаем текст из text_entities или text
-            message_text = self._extract_message_text(msg)
-            if message_text:
-                lines.append(message_text)
-
-            lines.append("")
-
-        return "\n".join(lines)
+        return self._format_compact_messages(normalized_messages)
 
     def _format_simple_messages(self, messages: List[Dict]) -> str:
-        """Форматирует простой список сообщений в универсальный формат"""
-        lines = []
+        """Форматирует простой список сообщений в компактный формат"""
+        normalized_messages: List[Dict[str, Any]] = []
 
         for msg in messages:
             # Извлекаем автора
@@ -114,15 +105,118 @@ class JsonExtractor(BaseExtractor):
             if not author:
                 author = "Unknown"
 
-            # Форматируем дату
-            formatted_date = self._format_date(timestamp)
+            normalized_messages.append(
+                {
+                    "author": author,
+                    "timestamp": timestamp,
+                    "text": text if text is not None else "",
+                }
+            )
 
-            if text:
-                lines.append(f"[{formatted_date}] {author}: {text}")
+        return self._format_compact_messages(normalized_messages)
+
+    def _format_compact_messages(self, messages: List[Dict[str, Any]]) -> str:
+        """Форматирует переписку: заголовок даты + склейка подряд идущих сообщений автора"""
+        if not messages:
+            return ""
+
+        lines: List[str] = []
+        last_date_key: Optional[str] = None
+        current_block: Optional[Dict[str, str]] = None
+
+        for msg in messages:
+            author = str(msg.get("author") or "Unknown")
+            text = str(msg.get("text") or "").strip()
+            dt = self._parse_datetime(msg.get("timestamp"))
+
+            date_key = dt.strftime("%Y-%m-%d") if dt else "unknown"
+            if date_key != last_date_key:
+                if current_block:
+                    lines.append(self._render_compact_block(current_block))
+                    current_block = None
+
+                lines.append(self._format_date_heading(dt))
+                last_date_key = date_key
+
+            time_str = dt.strftime("%H:%M") if dt else "unknown"
+
+            if current_block and current_block["author"] == author:
+                current_block["text"] = self._merge_message_text(current_block["text"], text)
             else:
-                lines.append(f"[{formatted_date}] {author}: ")
+                if current_block:
+                    lines.append(self._render_compact_block(current_block))
+
+                current_block = {
+                    "time": time_str,
+                    "author": author,
+                    "text": text,
+                }
+
+        if current_block:
+            lines.append(self._render_compact_block(current_block))
 
         return "\n".join(lines)
+
+    def _render_compact_block(self, block: Dict[str, str]) -> str:
+        return f"[{block['time']}] {block['author']}: {block['text']}".rstrip()
+
+    def _merge_message_text(self, current_text: str, new_text: str) -> str:
+        if not new_text:
+            return current_text
+        if not current_text:
+            return new_text
+        if current_text[-1] in ".!?…":
+            return f"{current_text} {new_text}"
+        return f"{current_text}. {new_text}"
+
+    def _format_date_heading(self, dt: Optional[datetime]) -> str:
+        if not dt:
+            return "##  unknown"
+
+        ru_months = [
+            "января",
+            "февраля",
+            "марта",
+            "апреля",
+            "мая",
+            "июня",
+            "июля",
+            "августа",
+            "сентября",
+            "октября",
+            "ноября",
+            "декабря",
+        ]
+        month_name = ru_months[dt.month - 1]
+        return f"##  {dt.day} {month_name} {dt.year}"
+
+    def _parse_datetime(self, date_value: Any) -> Optional[datetime]:
+        if not date_value:
+            return None
+
+        if isinstance(date_value, (int, float)):
+            try:
+                return datetime.fromtimestamp(date_value)
+            except (ValueError, OSError):
+                return None
+
+        if isinstance(date_value, str):
+            # Формат YYYY-MM-DD HH:MM(:SS)
+            date_match = re.match(r"^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2})(:\d{2})?", date_value)
+            if date_match:
+                value = f"{date_match.group(1)} {date_match.group(2)}"
+                try:
+                    return datetime.strptime(value, "%Y-%m-%d %H:%M")
+                except ValueError:
+                    pass
+
+            # ISO формат
+            try:
+                return datetime.fromisoformat(date_value.replace("Z", "+00:00"))
+            except (ValueError, AttributeError):
+                return None
+
+        return None
 
     def _format_date(self, date_value: Any) -> str:
         """Форматирует дату в формат [YYYY-MM-DD HH:MM]"""

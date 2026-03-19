@@ -3,6 +3,9 @@
 """
 import sys
 import os
+from pathlib import Path
+
+from backend.worker.modules.parser import parse
 
 
 def test_imports():
@@ -134,6 +137,12 @@ def test_extractor_availability():
     except Exception as e:
         print(f"✗ Extractor availability error: {e}")
         return False
+
+
+def test_extractor_messages():
+    result = parse(r"C:\Users\JeeEssEm\Desktop\ChatExport_2026-03-07\result.json")
+    path = Path(r"C:\Users\JeeEssEm\Desktop\ChatExport_2026-03-07\result.txt")
+    path.write_text(result["text"], encoding="utf-8")
 
 
 def run_all_tests():
