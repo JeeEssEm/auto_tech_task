@@ -23,15 +23,7 @@ class TextExtractor(BaseExtractor):
             with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
                 text = f.read()
 
-        if original_filename and original_filename.lower().endswith('.md'):
-            text = self._clean_markdown(text)
+        # Для .md файлов не чистим больше - оставляем как есть
+        # Markdown валиден сам по себе и может содержать полезное форматирование
 
         return text, metadata
-
-    def _clean_markdown(self, text: str) -> str:
-        text = re.sub(r'^#+\s+', '', text, flags=re.MULTILINE)
-        text = re.sub(r'\*\*(.*?)\*\*', r'\1', text)
-        text = re.sub(r'\*(.*?)\*', r'\1', text)
-        text = re.sub(r'\[([^\]]+)\]\([^)]+\)', r'\1', text)
-        text = re.sub(r'`([^`]+)`', r'\1', text)
-        return text.strip()

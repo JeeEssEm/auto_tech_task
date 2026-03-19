@@ -1,14 +1,31 @@
 """
-Парсер для аудио файлов с использованием Whisper
+Парсер для аудио файлов с использованием Docling и Whisper
 """
+from docling.datamodel import asr_model_specs
+from docling.datamodel.base_models import InputFormat
+from docling.datamodel.pipeline_options import AsrPipelineOptions
+from docling.document_converter import AudioFormatOption
+from docling.pipeline.asr_pipeline import AsrPipeline
+
 from .base import BaseExtractor
 
+
 class AudioExtractor(BaseExtractor):
-    def __init__(self, use_whisper=True, model_name="large"):
+    def __init__(self, use_whisper=True, model_name="base"):
         super().__init__()
         self.use_whisper = use_whisper
-        self.model_name = model_name
-        self._whisper_model = None
+        self._converter = None
+        match model_name:
+            case "tiny":
+                self.model_name = asr_model_specs.WHISPER_TINY
+            case "base":
+                self.model_name = asr_model_specs.WHISPER_BASE
+            case "turbo":
+                self.model_name = asr_model_specs.WHISPER_TURBO
+            case "medium":
+                self.model_name = asr_model_specs.WHISPER_MEDIUM
+            case _:
+                raise Exception("whisper model not found")
 
     def extract(self, file_path: str, original_filename: str = None):
         if not self.use_whisper:
@@ -17,31 +34,44 @@ class AudioExtractor(BaseExtractor):
         metadata = self._get_basic_metadata(original_filename)
 
         try:
-            import whisper
+            from docling.document_converter import DocumentConverter
         except ImportError:
-            raise ImportError("Whisper не установлен. Установите: pip install openai-whisper")
+            raise ImportError(
+                "Docling не установлен. Установите: pip install docling"
+            )
 
-        # Ленивая загрузка
-        if self._whisper_model is None:
-            self._whisper_model = whisper.load_model(self.model_name)
+        try:
 
-        # Whisper умеет напрямую читать пути файлов с диска
-        result = self._whisper_model.transcribe(
-            file_path,
-            language='ru',
-            task='transcribe',
-            fp16=False,
-            beam_size=5,
-            best_of=5,
-            temperature=0.0,
-            compression_ratio_threshold=2.4,
-            no_speech_threshold=0.6,
-            condition_on_previous_text=False,
-            word_timestamps=False,
-            verbose=False
-        )
+            pipeline_options = AsrPipelineOptions()
+            pipeline_options.asr_options = self.model_name
 
-        text = result["text"].strip()
-        metadata["duration"] = result.get("duration", 0)  # Специфично для медиа
+            converter = DocumentConverter(
+                format_options={
+                    InputFormat.AUDIO: AudioFormatOption(
+                        pipeline_cls=AsrPipeline,
+                        pipeline_options=pipeline_options,
+                    )
+                }
+            )
 
-        return text, metadata
+            result = converter.convert(file_path)
+            text = result.document.export_to_markdown().strip()
+
+            if not text:
+                text = "(пустой или не распознаваемый аудиофайл)"
+
+            # Пытаемся получить информацию о длительности
+            try:
+                import librosa
+                y, sr = librosa.load(file_path, sr=None)
+                duration = librosa.get_duration(y=y, sr=sr)
+                metadata["duration"] = duration
+            except Exception:
+                pass
+
+            return text, metadata
+
+        except Exception as e:
+            raise RuntimeError(
+                f"Ошибка при транскрипции аудио (Whisper модель: {self.model_name}): {str(e)}"
+            )

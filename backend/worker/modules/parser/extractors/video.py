@@ -1,16 +1,31 @@
 """
-Парсер для видео файлов - извлекает аудио и транскрибирует
+Парсер для видео файлов - использует Docling для транскрипции
 """
-import os
-import tempfile
-import subprocess
+from docling.datamodel import asr_model_specs
+from docling.datamodel.base_models import InputFormat
+from docling.datamodel.pipeline_options import AsrPipelineOptions
+from docling.document_converter import AudioFormatOption
+from docling.pipeline.asr_pipeline import AsrPipeline
+
 from .base import BaseExtractor
 
+
 class VideoExtractor(BaseExtractor):
-    def __init__(self, use_whisper=True, model_name="tiny"):
+    def __init__(self, use_whisper=True, model_name="base"):
         super().__init__()
         self.use_whisper = use_whisper
-        self.model_name = model_name
+        # tiny, base, small, medium, large
+        match model_name:
+            case "tiny":
+                self.model_name = asr_model_specs.WHISPER_TINY
+            case "base":
+                self.model_name = asr_model_specs.WHISPER_BASE
+            case "turbo":
+                self.model_name = asr_model_specs.WHISPER_TURBO
+            case "medium":
+                self.model_name = asr_model_specs.WHISPER_MEDIUM
+            case _:
+                raise Exception("whisper model not found")
 
     def extract(self, file_path: str, original_filename: str = None):
         if not self.use_whisper:
@@ -18,34 +33,46 @@ class VideoExtractor(BaseExtractor):
 
         metadata = self._get_basic_metadata(original_filename)
 
-        # Резервируем имя временного файла (только для аудио дорожки)
-        with tempfile.NamedTemporaryFile(delete=False, suffix='.wav') as tmp:
-            audio_path = tmp.name
+        try:
+            from docling.document_converter import DocumentConverter
+        except ImportError:
+            raise ImportError(
+                "Docling не установлен. Установите: pip install docling"
+            )
 
         try:
-            cmd = [
-                'ffmpeg', '-i', file_path, '-vn', '-acodec', 'pcm_s16le',
-                '-ar', '16000', '-ac', '1', '-y', audio_path
-            ]
-            process = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+            pipeline_options = AsrPipelineOptions()
+            pipeline_options.asr_options = self.model_name
 
-            if process.returncode != 0:
-                raise RuntimeError(f"FFmpeg ошибка при извлечении аудио: {process.stderr[:200]}")
-
-            if not os.path.exists(audio_path) or os.path.getsize(audio_path) < 100:
-                raise RuntimeError("Не удалось извлечь аудиодорожку (файл пуст или не создан)")
-
-            # Транскрибируем извлеченное аудио
-            from .audio import AudioExtractor
-            audio_extractor = AudioExtractor(
-                use_whisper=self.use_whisper,
-                model_name=self.model_name
+            converter = DocumentConverter(
+                format_options={
+                    InputFormat.AUDIO: AudioFormatOption(
+                        pipeline_cls=AsrPipeline,
+                        pipeline_options=pipeline_options,
+                    )
+                }
             )
-            text, audio_metadata = audio_extractor.extract(audio_path, original_filename)
 
-            metadata["duration"] = audio_metadata.get("duration", 0)
+            result = converter.convert(file_path)
+            text = result.document.export_to_markdown().strip()
+
+            if not text:
+                text = "(пустой или не распознаваемый видеофайл)"
+
+            try:
+                import cv2
+                cap = cv2.VideoCapture(file_path)
+                fps = cap.get(cv2.CAP_PROP_FPS)
+                frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+                duration = frame_count / fps if fps > 0 else 0
+                metadata["duration"] = duration
+                cap.release()
+            except Exception:
+                pass
+
             return text, metadata
 
-        finally:
-            if os.path.exists(audio_path):
-                os.unlink(audio_path)
+        except Exception as e:
+            raise RuntimeError(
+                f"Ошибка при транскрипции видео (Whisper модель: {self.model_name}): {str(e)}"
+            )
