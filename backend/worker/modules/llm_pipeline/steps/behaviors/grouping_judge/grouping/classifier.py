@@ -49,17 +49,17 @@ def classify_cluster(cluster: list[EmbeddedStagingNode]) -> ClusterResult | None
         )
 
     # Проверяем эквивалентность всех пар значений
-    all_equivalent = all(
-        _are_values_equivalent(a, b)
-            for a, b in combinations(cluster, 2)
-    )
-    if all_equivalent:
-        winner = _pick_best(cluster)
-        return ClusterResult(
-            status="DUPLICATE",
-            winning_node=winner,
-            rationale="Все значения семантически эквивалентны. Выбрана нода с наибольшим авторитетом.",
-            all_source_ids=all_source_ids
-        )
+    # all_equivalent = all(
+    #     _are_values_equivalent(a, b)
+    #         for a, b in combinations(cluster, 2)
+    # )
+    # if all_equivalent:
+    #     winner = _pick_best(cluster)
+    #     return ClusterResult(
+    #         status="DUPLICATE",
+    #         winning_node=winner,
+    #         rationale="Все значения семантически эквивалентны. Выбрана нода с наибольшим авторитетом.",
+    #         all_source_ids=all_source_ids
+    #     )
 
     return None  # нужен LLM-судья

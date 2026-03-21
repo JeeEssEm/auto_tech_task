@@ -1,15 +1,22 @@
 import asyncio
 import json
 
+import structlog
+
 from backend.worker.modules.llm_pipeline.abstractions.ports import LLMChatPort
 from backend.worker.modules.llm_pipeline.steps.behaviors.grouping_judge.config import GroupingJudgeSettings
 from backend.worker.modules.llm_pipeline.steps.behaviors.grouping_judge.grouping.entrypoint import group_and_classify
-from backend.worker.modules.llm_pipeline.steps.behaviors.grouping_judge.prompting import build_judge_prompt
+from backend.worker.modules.llm_pipeline.steps.behaviors.grouping_judge.prompting import (
+    build_judge_prompt,
+    JUDGE_SYSTEM_PROMPT
+)
 from backend.worker.modules.llm_pipeline.steps.behaviors.grouping_judge.schemas import (
     ClusterResult, JudgeResponse,
     GroupingJudgeResult, GKGNode, PendingConflict
 )
 from backend.worker.modules.llm_pipeline.steps.embedder.schemas import EmbeddedStagingNode
+
+logger = structlog.get_logger(__name__)
 
 
 class GroupingJudgeBehavior:
@@ -57,20 +64,21 @@ class GroupingJudgeBehavior:
         try:
             response = await self._chat.chat(
                 messages=[
+                    {"role": "system", "content": JUDGE_SYSTEM_PROMPT},
                     {"role": "user", "content": user_prompt},
                 ],
                 model=self._settings.model,
                 temperature=self._settings.temperature,
                 max_tokens=self._settings.max_tokens,
-                response_model=JudgeResponse,
+                response_model=str,
                 event_id=f"judge_{cluster[0].node.scope}_{cluster[0].node.property}",
             )
-            raw = response.model_dump_json()
         except Exception as e:
             # LLM недоступен — не теряем данные, уходим в UNRESOLVED
-            raw = f'{{"verdict": "UNRESOLVED", "rationale": "LLM error: {e}"}}'
+            logger.error("Judge LLM call is not available", exc_info=True)
+            response = f'{{"verdict": "UNRESOLVED", "rationale": "LLM error: {e}"}}'
 
-        return parse_judge_response(raw, cluster)
+        return parse_judge_response(response, cluster)
 
     def _assemble_result(self, results: list[ClusterResult]) -> GroupingJudgeResult:
         gkg_nodes: list[GKGNode] = []

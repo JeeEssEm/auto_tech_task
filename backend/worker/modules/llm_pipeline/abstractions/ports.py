@@ -2,7 +2,7 @@ from abc import ABC, abstractmethod
 from typing import Any, TypeVar, Type
 from pydantic import BaseModel
 
-ResponseT = TypeVar('ResponseT', bound=BaseModel)
+ResponseT = TypeVar('ResponseT', bound=BaseModel | str)
 
 
 class LLMChatPort(ABC):

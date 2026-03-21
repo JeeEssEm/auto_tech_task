@@ -15,12 +15,12 @@ def group_and_classify(
     - needs_judge: кластеры, которые нужно передать судье
     """
     exact_clusters = group_by_exact(nodes)
-    merged_clusters = semantic_merge(exact_clusters, distance_threshold=semantic_threshold)
+    # merged_clusters = semantic_merge(exact_clusters, distance_threshold=semantic_threshold)
 
     resolved: list[ClusterResult] = []
     needs_judge: list[list[EmbeddedStagingNode]] = []
 
-    for cluster in merged_clusters:
+    for cluster in exact_clusters.values():
         result = classify_cluster(cluster)
         if result is not None:
             resolved.append(result)

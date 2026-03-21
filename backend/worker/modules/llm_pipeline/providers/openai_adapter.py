@@ -49,8 +49,6 @@ class OpenAIChatAdapter(LLMChatPort):
         headers = {"Content-Type": "application/json"}
         if self.settings.api_key:
             headers["Authorization"] = f"Bearer {self.settings.api_key}"
-        if event_id:
-            headers["Idempotency-Key"] = event_id
 
         self._log.debug(
             "→ request | event=%s model=%s response_model=%s messages=%s",
@@ -127,6 +125,8 @@ class OpenAIChatAdapter(LLMChatPort):
             ) from e
 
     def _parse_json_response(self, content: str, response_model: Type[ResponseT]) -> ResponseT:
+        if response_model is str:
+            return content
         """Extract JSON from content and validate against Pydantic model."""
         # Clean up markdown code blocks
         content = content.strip()
