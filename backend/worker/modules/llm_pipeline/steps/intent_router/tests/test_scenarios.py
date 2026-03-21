@@ -274,5 +274,67 @@ class TestIntentRouterPerformance:
                 assert isinstance(result, IntentRouterResponse)
 
 
+class TestIntentRouterContextFieldsParametrized:
+    """Parametrized checks for pending_actions / snapshots / attachments fields."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "request_payload,expected_role",
+        [
+            pytest.param(
+                {
+                    "user_prompt": "Redis",
+                    "attachments": [],
+                    "pending_actions": ["Какой брокер очередей использовать?"],
+                },
+                BehaviorRole.HARVESTER,
+                id="pending_actions_answer",
+            ),
+            pytest.param(
+                {
+                    "user_prompt": "Переходим на ClickHouse",
+                    "attachments": [],
+                    "gkg_snapshot": "Database/Engine = PostgreSQL",
+                },
+                BehaviorRole.HARVESTER,
+                id="gkg_conflict_hint",
+            ),
+            pytest.param(
+                {
+                    "user_prompt": "Перепиши раздел безопасности",
+                    "attachments": [],
+                    "doc_snapshot": "Раздел Безопасность уже существует",
+                },
+                BehaviorRole.ARCHITECT,
+                id="doc_snapshot_regen",
+            ),
+            pytest.param(
+                {
+                    "user_prompt": "Учти вложенный файл",
+                    "attachments": [
+                        {
+                            "file_name": "notes.txt",
+                            "truncated_content": "Нужна интеграция с SSO",
+                        }
+                    ],
+                },
+                BehaviorRole.HARVESTER,
+                id="attachments_harvester",
+            ),
+        ],
+    )
+    async def test_context_fields_routing(self, intent_router, request_payload, expected_role):
+        from backend.worker.modules.llm_pipeline.steps.intent_router.schemas import (
+            IntentRouterRequest,
+        )
+
+        request = IntentRouterRequest(**request_payload)
+        result = await intent_router.extract_behaviours(request)
+
+        assert isinstance(result, IntentRouterResponse)
+        roles = [b.role for b in result.behaviors]
+        assert expected_role in roles
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v", "-s", "-m", "not slow"])

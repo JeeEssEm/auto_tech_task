@@ -20,7 +20,7 @@ from backend.worker.modules.llm_pipeline.steps.intent_router.intent_router impor
 from backend.worker.modules.llm_pipeline.steps.intent_router.config import IntentRouterSettings
 from backend.worker.modules.llm_pipeline.steps.intent_router.schemas import (
     IntentRouterRequest,
-    IntentRouterResponse,
+    IntentRouterResponse, AttachmentInfo,
 )
 from backend.worker.modules.llm_pipeline.steps.shared.behaviours import (
     BehaviorRole,
@@ -308,6 +308,25 @@ class TestIntentRouterMixed:
         assert isinstance(result, IntentRouterResponse)
         assert len(result.behaviors) > 0
 
+    @pytest.mark.asyncio
+    async def test_plus_ultra_hard(self, intent_router):
+        """Test: User provides new fact AND asks question."""
+        request = IntentRouterRequest(
+            user_prompt=(
+                "Вот файл со старым ТЗ."
+                " Возьми оттуда блок аналитики, поменяй блок аналитики из текущего ТЗ на тот, что в старом."
+                " Ну и поменяй в этом блоке Tableau на DataLens"
+            ),
+            attachments=[AttachmentInfo(
+                file_name="старое_тз.docx",
+                truncated_content="Техническое задание проекта информационно-аналитической системы для мониторинга состояния спортсменов")],
+        )
+
+        result = await intent_router.extract_behaviours(request)
+
+        assert isinstance(result, IntentRouterResponse)
+        assert len(result.behaviors) > 0
+
 
 class TestIntentRouterResponseValidity:
     """Test general response validity and structure."""
@@ -355,6 +374,70 @@ class TestIntentRouterResponseValidity:
             assert behavior.user_prompt in input_text, (
                 f"user_prompt '{behavior.user_prompt}' is not a quote from input '{input_text}'"
             )
+
+
+class TestIntentRouterContextFields:
+    """Test routing behavior with new context fields in IntentRouterRequest."""
+
+    @pytest.mark.asyncio
+    async def test_pending_actions_answer_routes_to_harvester(self, intent_router):
+        request = IntentRouterRequest(
+            user_prompt="Redis",
+            attachments=[],
+            pending_actions=["Какой брокер очередей использовать?"],
+        )
+
+        result = await intent_router.extract_behaviours(request)
+
+        assert isinstance(result, IntentRouterResponse)
+        roles = [b.role for b in result.behaviors]
+        assert BehaviorRole.HARVESTER in roles
+
+    @pytest.mark.asyncio
+    async def test_gkg_snapshot_conflict_hint_affects_reasoning(self, intent_router):
+        request = IntentRouterRequest(
+            user_prompt="Переходим с PostgreSQL на ClickHouse",
+            attachments=[],
+            gkg_snapshot="Database/Engine = PostgreSQL",
+        )
+
+        result = await intent_router.extract_behaviours(request)
+
+        assert isinstance(result, IntentRouterResponse)
+        harvester = [b for b in result.behaviors if b.role == BehaviorRole.HARVESTER]
+        assert len(harvester) > 0
+
+    @pytest.mark.asyncio
+    async def test_doc_snapshot_with_regen_request_routes_to_architect(self, intent_router):
+        request = IntentRouterRequest(
+            user_prompt="Перепиши раздел про безопасность, добавь OAuth2",
+            attachments=[],
+            doc_snapshot="Разделы: Введение, Безопасность, API",
+        )
+
+        result = await intent_router.extract_behaviours(request)
+
+        assert isinstance(result, IntentRouterResponse)
+        roles = [b.role for b in result.behaviors]
+        assert BehaviorRole.ARCHITECT in roles
+
+    @pytest.mark.asyncio
+    async def test_attachments_force_harvester_activation(self, intent_router):
+        request = IntentRouterRequest(
+            user_prompt="Посмотри вложение и учти это в ТЗ",
+            attachments=[
+                {
+                    "file_name": "requirements.md",
+                    "truncated_content": "Нужно добавить RBAC и SSO",
+                }
+            ],
+        )
+
+        result = await intent_router.extract_behaviours(request)
+
+        assert isinstance(result, IntentRouterResponse)
+        roles = [b.role for b in result.behaviors]
+        assert BehaviorRole.HARVESTER in roles
 
 
 if __name__ == "__main__":
