@@ -9,10 +9,14 @@ from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_excep
 from backend.worker.modules.llm_pipeline.abstractions.ports import LLMChatPort
 from backend.worker.modules.llm_pipeline.providers.schemas import ChatResult
 from backend.worker.modules.llm_pipeline.providers.configs.openai_settings import OpenAIChatSettings
+from backend.worker.modules.llm_pipeline.providers.utils.json_utils import (
+    escape_control_chars_in_strings,
+    extract_first_json_object
+)
 from backend.worker.modules.llm_pipeline.providers.utils.logs import build_file_logger
 from backend.worker.modules.llm_pipeline.providers.utils.retries import is_retryable
 
-ResponseT = TypeVar('ResponseT', bound=BaseModel)
+ResponseT = TypeVar('ResponseT', bound=BaseModel | str)
 
 
 class OpenAIChatAdapter(LLMChatPort):
@@ -125,8 +129,6 @@ class OpenAIChatAdapter(LLMChatPort):
             ) from e
 
     def _parse_json_response(self, content: str, response_model: Type[ResponseT]) -> ResponseT:
-        if response_model is str:
-            return content
         """Extract JSON from content and validate against Pydantic model."""
         # Clean up markdown code blocks
         content = content.strip()
@@ -136,6 +138,10 @@ class OpenAIChatAdapter(LLMChatPort):
             content = content[3:]
         if content.endswith("```"):
             content = content[:-3]
-        
-        content = content.strip()
+
+        if response_model is str:
+            return content
+
+        content = extract_first_json_object(content.strip())
+        content = escape_control_chars_in_strings(content)
         return response_model.model_validate_json(content)
