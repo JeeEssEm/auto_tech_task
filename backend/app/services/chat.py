@@ -143,7 +143,36 @@ class ChatService:
         await self._chat_repo.add_attachments_to_message_async(attachment_ids, message.id)
         attachments = await self._chat_repo.get_attachments_async(attachment_ids)
 
-        if text:
+        if attachments:
+            parsed_files: list[dict[str, str]] = []
+            attachments_with_parsed = await self._chat_repo.get_attachments_with_parsed_async(attachment_ids)
+            for attach in attachments_with_parsed:
+                parsed = getattr(attach, "parsed_attachment", None)
+                if parsed is None:
+                    continue
+                try:
+                    transcript = await self._storage.get_text(self._bucket_name, parsed.id)
+                except Exception as e:
+                    logger.warning("parsed_text_read_failed", attachment_id=attach.id, error=str(e))
+                    continue
+
+                if not transcript.strip():
+                    continue
+
+                parsed_files.append(
+                    {
+                        "id": attach.id,
+                        "content": transcript,
+                        "name": attach.file_name,
+                    }
+                )
+
+            await self._dispatcher.dispatch_update_tz(
+                chat_id=chat_id, user_id=user_id,
+                new_parsed_files=parsed_files or None,
+                comment=text,
+            )
+        elif text:
             await self._quota.check_and_record_async(user_id, UsageAction.GENERATE_TZ)
             await self._dispatcher.dispatch_generate_tz(
                 chat_id=chat_id, user_id=user_id, prompt=text

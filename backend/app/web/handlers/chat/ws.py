@@ -35,6 +35,12 @@ async def task_status_listener(pubsub: redis.client.PubSub, websocket: WebSocket
                 case EventType.PARSING_STATUS:
                     logger.debug("ws_parsing_status_event", data=data)
                     await websocket.send_json(data)
+
+                case EventType.EXPORT_READY:
+                    await websocket.send_json(data)
+
+                case EventType.ERROR:
+                    await websocket.send_json(data)
     except asyncio.CancelledError:
         pass
 

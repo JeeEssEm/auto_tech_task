@@ -31,7 +31,7 @@ def create_lifespan(config: AppSettings):
         container = app.state.dishka_container
 
         storage_worker: StorageWorker = await container.get(StorageWorker)
-        await storage_worker.create_bucket("user-files")
+        await storage_worker.create_bucket(config.storage.BUCKET_NAME)
 
         await broker.startup()
 

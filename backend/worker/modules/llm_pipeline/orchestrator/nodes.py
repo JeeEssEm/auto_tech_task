@@ -76,6 +76,7 @@ class OrchestratorDeps:
     build_document_snapshot: "Callable[[int, str, str], Awaitable[DocumentSnapshot]] | None" = None
     resolve_pending_action: "Callable[[int, str, str], Awaitable[list[GKGNode]]] | None" = None
     mark_block_manual: "Callable[[int, str, str], Awaitable[None]] | None" = None
+    apply_template_structure: "Callable[[int, str], Awaitable[None]] | None" = None
 
 
 def make_route_node(deps: OrchestratorDeps):

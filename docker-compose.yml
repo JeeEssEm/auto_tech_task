@@ -4,7 +4,7 @@
 
 services:
   db:
-      image: postgres:17-alpine
+      image: pgvector/pgvector:pg17
       restart: unless-stopped
       env_file: .env
       environment:
@@ -16,7 +16,7 @@ services:
       networks:
         - app_network
       ports:
-        - "5432:5432"
+        - "5435:5432"
 
   redis:
     image: redis:8-alpine
@@ -53,7 +53,7 @@ services:
       - "8333:8333"
     command: 'server -s3 -s3.config=/etc/seaweedfs/s3_config.json -dir=/data'
     volumes:
-      - ./data:/data
+      - seaweedfs:/var/lib/seaweedfs/data
       - ./s3_config.json:/etc/seaweedfs/s3_config.json
     restart: unless-stopped
     networks:
@@ -63,3 +63,4 @@ volumes:
   postgres-data:
   redis-data:
   rabbitmq:
+  seaweedfs:

@@ -63,17 +63,18 @@ class UserRepository:
         return session.user
 
     async def create_session_async(self, session_id: str, user_id: int, expires_at: datetime.datetime, user_agent: str):
+        user_agent_value = (user_agent or "unknown")[:128]
         await self._db.session.create(
             SessionCreateInput(
                 id=session_id,
                 user_id=user_id,
                 expires_at=expires_at,
-                user_agent=user_agent
+                user_agent=user_agent_value
             )
         )
 
     async def delete_session_async(self, session_id: str):
-        await self._db.session.delete(where=SessionWhereUniqueInput(id=session_id))
+        await self._db.session.delete_many(where=SessionWhereInput(id=session_id))
 
     async def get_active_subscription_tier_async(self, user_id: int) -> str | None:
         now = datetime.datetime.now(datetime.timezone.utc)

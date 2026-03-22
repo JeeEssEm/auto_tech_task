@@ -21,15 +21,23 @@ class AuthSettings(BaseSettings):
 class RedisSettings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="REDIS_")
 
-    USER: str
-    PASSWORD: str
+    PASSWORD: str | None = None
+    USER: str = "default"
+    USER_PASSWORD: str | None = None
+    USE_ACL: bool = False
     HOST: str = "localhost"
     PORT: int = 6379
 
     @property
     def connection_url(self) -> str:
-        # return f"redis://{self.USER}:{self.USER_PASSWORD}@{self.HOST}:{self.PORT}"
-        return f"redis://{self.HOST}:{self.PORT}"
+        password = self.PASSWORD or self.USER_PASSWORD
+        if not password:
+            return f"redis://{self.HOST}:{self.PORT}"
+
+        if self.USE_ACL:
+            return f"redis://{self.USER}:{password}@{self.HOST}:{self.PORT}"
+
+        return f"redis://:{password}@{self.HOST}:{self.PORT}"
 
 
 class RabbitMqSettings(BaseSettings):

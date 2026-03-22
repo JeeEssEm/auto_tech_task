@@ -80,6 +80,15 @@ class ChatRepository:
             order={"created_at": "asc"}
         )
 
+    async def get_chat_template_async(self, chat_id: int) -> ChatTemplate:
+        chat = await self._db.chat.find_unique(where={"id": chat_id})
+        if chat is None or not chat.template:
+            return ChatTemplate.FREE
+        try:
+            return ChatTemplate(chat.template)
+        except ValueError:
+            return ChatTemplate.FREE
+
     async def check_user_has_chat_async(self, user_id: int, chat_id: int) -> bool:
         return await self._db.chat.find_first(where=ChatWhereInput(id=chat_id, owner_id=user_id)) is not None
 
@@ -111,6 +120,16 @@ class ChatRepository:
                     "in": attachment_ids
                 }
             }
+        )
+
+    async def get_attachments_with_parsed_async(self, attachment_ids: list[str]) -> list[Attachment]:
+        return await self._db.attachment.find_many(
+            where={
+                "id": {
+                    "in": attachment_ids
+                }
+            },
+            include={"parsed_attachment": True}
         )
 
     async def check_all_attachments_belong_to_user_async(

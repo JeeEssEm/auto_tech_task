@@ -10,6 +10,7 @@ from backend.app.infrastructure.auth.typed_roles import AuthenticatedUser
 from backend.app.infrastructure.config import AppSettings
 from backend.app.infrastructure.persistent.chat import ChatRepository
 from backend.app.infrastructure.persistent.generation import GenerationRepository
+from backend.app.infrastructure.persistent.llm_pipeline import GKGRepository, PendingActionsRepository
 from backend.app.infrastructure.storage import StorageWorker
 from backend.app.services import ChatService
 from backend.app.web.schemas.tz_generation import (
@@ -17,6 +18,7 @@ from backend.app.web.schemas.tz_generation import (
     GenerateCustomBlockRequest,
     ManualEditBlockRequest,
     RegenerateBlockRequest,
+    ResolveConflictRequest,
     RunFullPipelineRequest,
     UpdateCustomSectionsRequest,
     UpdateTZRequest,
@@ -62,6 +64,7 @@ async def _collect_parsed_sources(
         sources.append({
             "id": aid,
             "type": parsed["file_type"],
+            "name": parsed["file_name"],
             "content": parsed["transcript"],
         })
 
@@ -74,11 +77,14 @@ async def run_full_pipeline(
     body: RunFullPipelineRequest,
     user: FromDishka[AuthenticatedUser],
     chat_repo: FromDishka[ChatRepository],
+    gen_repo: FromDishka[GenerationRepository],
     chat_service: FromDishka[ChatService],
     dispatcher: FromDishka[TaskDispatcher],
 ) -> dict[str, str]:
     """Запуск полного пайплайна первичной генерации ТЗ."""
     await _ensure_user_owns_chat(chat_repo, user.id, chat_id)
+    if await gen_repo.has_active_run(chat_id):
+        raise HTTPException(status_code=409, detail="Generation is already running")
 
     parsed_files = await _collect_parsed_sources(
         chat_service, user.id, chat_id, body.attachment_ids,
@@ -86,10 +92,16 @@ async def run_full_pipeline(
     if not parsed_files:
         raise HTTPException(status_code=400, detail="No parsed files provided")
 
+    template = body.template_type
+    if not template:
+        template = (await chat_repo.get_chat_template_async(chat_id)).value
+
     await dispatcher.dispatch_run_full_pipeline(
         chat_id=chat_id,
         user_id=user.id,
         parsed_files=parsed_files,
+        template_type=template,
+        comment=body.comment,
     )
 
     return {"status": "accepted"}
@@ -101,11 +113,14 @@ async def update_tz(
     body: UpdateTZRequest,
     user: FromDishka[AuthenticatedUser],
     chat_repo: FromDishka[ChatRepository],
+    gen_repo: FromDishka[GenerationRepository],
     chat_service: FromDishka[ChatService],
     dispatcher: FromDishka[TaskDispatcher],
 ) -> dict[str, str]:
     """Обновление ТЗ: догрузка файлов и/или глобальный комментарий."""
     await _ensure_user_owns_chat(chat_repo, user.id, chat_id)
+    if await gen_repo.has_active_run(chat_id):
+        raise HTTPException(status_code=409, detail="Generation is already running")
 
     if not body.new_attachment_ids and not body.comment:
         raise HTTPException(
@@ -138,11 +153,36 @@ async def regenerate_block(
     """Перегенерация конкретного блока ТЗ."""
     await _ensure_user_owns_chat(chat_repo, user.id, chat_id)
 
+    block_id = body.block_id or body.field_path
+    if not block_id:
+        raise HTTPException(status_code=400, detail="block_id is required")
+
     await dispatcher.dispatch_regenerate_block(
         chat_id=chat_id,
         user_id=user.id,
-        field_path=body.field_path,
+        block_id=block_id,
         instruction=body.instruction,
+    )
+
+    return {"status": "accepted"}
+
+
+@router.post("/{chat_id}/resolve-conflict")
+async def resolve_conflict(
+    chat_id: int,
+    body: ResolveConflictRequest,
+    user: FromDishka[AuthenticatedUser],
+    chat_repo: FromDishka[ChatRepository],
+    dispatcher: FromDishka[TaskDispatcher],
+) -> dict[str, str]:
+    """Разрешение pending-конфликта и запуск связанных обновлений."""
+    await _ensure_user_owns_chat(chat_repo, user.id, chat_id)
+
+    await dispatcher.dispatch_resolve_conflict(
+        chat_id=chat_id,
+        user_id=user.id,
+        action_id=body.action_id,
+        resolution=body.resolution,
     )
 
     return {"status": "accepted"}
@@ -291,12 +331,15 @@ async def export_tz(
     if body.format not in ("markdown", "word", "pdf"):
         raise HTTPException(status_code=400, detail="Unsupported format")
 
-    await dispatcher.dispatch_export_tz(
-        chat_id=chat_id,
-        user_id=user.id,
-        result_key=body.result_key,
-        format=body.format,
-    )
+    try:
+        await dispatcher.dispatch_export_tz(
+            chat_id=chat_id,
+            user_id=user.id,
+            result_key=body.result_key,
+            format=body.format,
+        )
+    except NotImplementedError as exc:
+        raise HTTPException(status_code=501, detail=str(exc))
 
     return {"status": "accepted"}
 
@@ -367,11 +410,15 @@ async def get_generation_content(
         result_key: str,
         user: FromDishka[AuthenticatedUser],
         chat_repo: FromDishka[ChatRepository],
+        gen_repo: FromDishka[GenerationRepository],
         storage: FromDishka[StorageWorker],
         config: FromDishka[AppSettings]
 ):
     if not await chat_repo.check_user_has_chat_async(user.id, chat_id):
         raise HTTPException(status_code=404, detail="Chat not found")
+
+    if not await gen_repo.has_result_key_for_chat(chat_id, result_key):
+        raise HTTPException(status_code=404, detail="Generation content not found")
 
     try:
         content = await storage.get_text(config.storage.BUCKET_NAME, result_key)
@@ -403,3 +450,32 @@ async def get_generations(
         }
         for run in runs
     ]
+
+
+@router.get("/{chat_id}/actions")
+async def get_pending_actions_and_conflicts(
+        chat_id: int,
+        user: FromDishka[AuthenticatedUser],
+        chat_repo: FromDishka[ChatRepository],
+        gkg_repo: FromDishka[GKGRepository],
+        pending_repo: FromDishka[PendingActionsRepository],
+):
+    if not await chat_repo.check_user_has_chat_async(user.id, chat_id):
+        raise HTTPException(status_code=404, detail="Chat not found")
+
+    conflicts = await gkg_repo.get_pending_conflicts(chat_id)
+    actions = await pending_repo.get_waiting_actions(chat_id)
+
+    return {
+        "conflicts": [
+            {
+                "id": conflict.id,
+                "scope": conflict.scope,
+                "property": conflict.property,
+                "rationale": conflict.rationale,
+                "options": [opt.node.value for opt in conflict.options],
+            }
+            for conflict in conflicts
+        ],
+        "actions": actions,
+    }

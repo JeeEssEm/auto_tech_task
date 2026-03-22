@@ -65,8 +65,31 @@ class GenerationRepository:
             order={"created_at": "desc"},
         )
 
+    async def has_active_run(self, chat_id: int) -> bool:
+        run = await self._db.generationrun.find_first(
+            where={
+                "chat_id": chat_id,
+                "status": {"in": [
+                    GenerationRunStatus.PENDING,
+                    GenerationRunStatus.INGESTING,
+                    GenerationRunStatus.COMPILING,
+                ]},
+            },
+            order={"created_at": "desc"},
+        )
+        return run is not None
+
     async def get_completed_runs(self, chat_id: int) -> list[GenerationRun]:
         return await self._db.generationrun.find_many(
             where={"chat_id": chat_id, "status": GenerationRunStatus.COMPLETED},
             order={"created_at": "asc"},
         )
+
+    async def has_result_key_for_chat(self, chat_id: int, result_key: str) -> bool:
+        run = await self._db.generationrun.find_first(
+            where={
+                "chat_id": chat_id,
+                "result_key": result_key,
+            }
+        )
+        return run is not None

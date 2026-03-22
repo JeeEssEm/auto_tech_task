@@ -13,7 +13,10 @@ class TaskDispatcher(Protocol):
     async def dispatch_run_full_pipeline(
             self, chat_id: int,
             user_id: int,
-            parsed_files: list[dict[str, str]], ) -> None:
+            parsed_files: list[dict[str, str]],
+            template_type: str,
+            comment: str | None = None,
+    ) -> None:
         ...
 
     async def dispatch_update_tz(
@@ -27,8 +30,17 @@ class TaskDispatcher(Protocol):
     async def dispatch_regenerate_block(
             self, chat_id: int,
             user_id: int,
-            field_path: str,
+            block_id: str,
             instruction: str | None = None
+    ) -> None:
+        ...
+
+    async def dispatch_resolve_conflict(
+            self,
+            chat_id: int,
+            user_id: int,
+            action_id: str,
+            resolution: str,
     ) -> None:
         ...
 

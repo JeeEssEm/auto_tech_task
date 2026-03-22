@@ -8,6 +8,14 @@ class RunFullPipelineRequest(BaseModel):
     attachment_ids: list[str] = Field(
         description="ID уже распарсенных вложений, привязанных к чату",
     )
+    template_type: str | None = Field(
+        default=None,
+        description="Шаблон ТЗ (если не передан, берется шаблон чата)",
+    )
+    comment: str | None = Field(
+        default=None,
+        description="Опциональный комментарий к первичной генерации",
+    )
 
 
 class UpdateTZRequest(BaseModel):
@@ -24,13 +32,24 @@ class UpdateTZRequest(BaseModel):
 
 class RegenerateBlockRequest(BaseModel):
     """Перегенерация конкретного блока ТЗ."""
-    field_path: str = Field(
-        description="Путь к блоку в dot-notation (например, 'technical.tech_stack')",
+    block_id: str | None = Field(
+        default=None,
+        description="Идентификатор блока для перегенерации",
+    )
+    field_path: str | None = Field(
+        default=None,
+        description="Совместимость со старым контрактом: путь к блоку",
     )
     instruction: str | None = Field(
         default=None,
         description="Инструкция пользователя (например, 'сделай покороче')",
     )
+
+
+class ResolveConflictRequest(BaseModel):
+    """Разрешение pending-конфликта пользователем."""
+    action_id: str = Field(description="ID pending_action")
+    resolution: str = Field(description="Выбранный вариант или произвольный ответ")
 
 
 class GenerateCustomBlockRequest(BaseModel):

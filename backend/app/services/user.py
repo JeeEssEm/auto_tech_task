@@ -40,7 +40,7 @@ class UserService:
         logger.info("user_created", login=user_data.login, email=str(user_data.email))
         return user
 
-    async def login_user_async(self, user_data: LoginUser, user_agent: str):
+    async def login_user_async(self, user_data: LoginUser, user_agent: str | None):
         user = await self._user_repo.get_user_by_email_or_login_async(user_data.email_or_login)
 
         if not user:
@@ -63,6 +63,7 @@ class UserService:
             seconds=self._settings.auth.session_expire_seconds
         )
 
-        await self._user_repo.create_session_async(session_id, user.id, expires_at, user_agent)
-        logger.info("user_logged_in", user_id=user.id, user_agent=user_agent)
+        safe_user_agent = user_agent or "unknown"
+        await self._user_repo.create_session_async(session_id, user.id, expires_at, safe_user_agent)
+        logger.info("user_logged_in", user_id=user.id, user_agent=safe_user_agent)
         return session_id

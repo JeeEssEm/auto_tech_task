@@ -128,3 +128,80 @@ model GenerationRun {
 
   @@index([chat_id, created_at])
 }
+
+model LlmGkgFact {
+  id               String    @id @default(uuid()) @db.Uuid
+  project_id       BigInt
+  scope            String    @db.VarChar(128)
+  property         String    @db.VarChar(128)
+  value            String    @db.Text
+  content_raw      String    @db.Text
+  status           String    @db.VarChar(16)
+  rationale        String    @db.Text
+  source_ids       Json
+  embedding_vector Unsupported("vector(1024)")?
+  created_at       DateTime  @default(now())
+  updated_at       DateTime  @updatedAt
+
+  @@index([project_id])
+  @@index([project_id, scope, property])
+  @@index([project_id, status])
+}
+
+model LlmPendingConflict {
+  id           String   @id @default(uuid()) @db.Uuid
+  project_id   BigInt
+  scope        String   @db.VarChar(128)
+  property     String   @db.VarChar(128)
+  rationale    String   @db.Text
+  options_json Json
+  created_at   DateTime @default(now())
+  updated_at   DateTime @updatedAt
+
+  @@index([project_id])
+}
+
+model LlmPendingAction {
+  id           String    @id @default(uuid()) @db.Uuid
+  project_id   BigInt
+  question     String    @db.Text
+  options_json Json?
+  status       String    @db.VarChar(16)
+  resolution   String?   @db.Text
+  created_at   DateTime  @default(now())
+  resolved_at  DateTime?
+  updated_at   DateTime  @updatedAt
+
+  @@index([project_id])
+  @@index([project_id, status])
+}
+
+model LlmRawSourceChunk {
+  id          BigInt   @id @default(autoincrement())
+  project_id  BigInt
+  source_id   String   @db.VarChar(128)
+  source_name String   @db.VarChar(260)
+  chunk_index Int
+  text        String   @db.Text
+  created_at  DateTime @default(now())
+
+  @@index([project_id])
+  @@index([project_id, source_id])
+}
+
+model LlmDocumentSection {
+  id           BigInt   @id @default(autoincrement())
+  project_id   BigInt
+  section_id   String   @db.VarChar(128)
+  title        String   @db.VarChar(256)
+  level        Int      @default(1)
+  required     Boolean  @default(true)
+  context_hint String   @db.Text
+  content_md   String   @db.Text
+  is_manual    Boolean  @default(false)
+  updated_at   DateTime @updatedAt
+  created_at   DateTime @default(now())
+
+  @@unique([project_id, section_id])
+  @@index([project_id])
+}

@@ -8,6 +8,7 @@ from backend.worker.modules.llm_pipeline.steps.behaviors.grouping_judge.schemas 
 @dataclass
 class OrchestratorResult:
     chat_text: str
+    chat_parts: list[str]
     doc_updates: list[ArchitectResponse]
     pending_conflicts: list[PendingConflict]
 
@@ -15,6 +16,7 @@ class OrchestratorResult:
     def from_state(cls, state: OrchestratorState) -> "OrchestratorResult":
         return cls(
             chat_text="\n\n".join(state.get("chat_parts", []) or ["Принято."]),
+            chat_parts=state.get("chat_parts", []) or ["Принято."],
             doc_updates=state.get("architect_responses", []),
             pending_conflicts=state.get("pending_conflicts", []),
         )

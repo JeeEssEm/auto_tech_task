@@ -14,9 +14,19 @@ from backend.app.domain.chat.value_objects.types import EventType, GenerationSta
 logger = structlog.get_logger(__name__)
 
 
-@broker.task(task_name="generate_tz")
+@broker.task(task_name="generate_tz_stub_disabled")
 @inject
 async def generate_tz_task(
+        chat_id: int,
+        user_id: int,
+        prompt: str,
+        chat_repo: FromDishka[ChatRepository],
+        redis_client: FromDishka[aredis.Redis]
+):
+    raise RuntimeError("stupid_answer_task is disabled for production/test contours")
+
+
+async def _legacy_stub_generate_tz_task(
         chat_id: int,
         user_id: int,
         prompt: str,

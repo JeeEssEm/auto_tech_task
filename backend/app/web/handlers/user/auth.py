@@ -36,6 +36,8 @@ async def login(
         value=session_id,
         httponly=True,
         secure=not cfg.debug,
+        samesite="lax",
+        path="/",
         max_age=cfg.auth.session_expire_seconds
     )
     # TODO: CSRF protection

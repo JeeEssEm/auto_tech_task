@@ -11,6 +11,7 @@ from backend.app.infrastructure.config import AppSettings
 from backend.app.infrastructure.persistent.user import UserRepository
 from backend.app.infrastructure.persistent.chat import ChatRepository
 from backend.app.infrastructure.persistent.generation import GenerationRepository
+from backend.app.infrastructure.persistent.llm_pipeline import GKGRepository, PendingActionsRepository
 from backend.app.infrastructure.storage import StorageWorker
 from backend.app.services import ChatService
 from backend.app.services.quota import QuotaService
@@ -57,6 +58,14 @@ class InfraProvider(Provider):
     @provide(scope=Scope.SESSION)
     def provide_generation_repository(self, db: Prisma) -> GenerationRepository:
         return GenerationRepository(db)
+
+    @provide(scope=Scope.SESSION)
+    def provide_gkg_repository(self, db: Prisma) -> GKGRepository:
+        return GKGRepository(db)
+
+    @provide(scope=Scope.SESSION)
+    def provide_pending_actions_repository(self, db: Prisma) -> PendingActionsRepository:
+        return PendingActionsRepository(db)
 
     @provide(scope=Scope.SESSION)
     def provide_task_dispatcher(self) -> TaskDispatcher:

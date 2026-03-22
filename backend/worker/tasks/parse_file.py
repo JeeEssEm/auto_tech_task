@@ -46,8 +46,7 @@ async def parse_file_task(
         )
         await chat_service.change_attachment_parsing_status_async(attachment_id, ParsingStatus.IN_PROCESS)
 
-        if not os.path.exists(root_path):
-            os.mkdir(root_path)
+        os.makedirs(root_path, exist_ok=True)
 
         await storage.download_file(bucket=config.storage.BUCKET_NAME, key=attachment_id, path=tmp_path)
 
