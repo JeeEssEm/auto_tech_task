@@ -27,3 +27,4 @@ class DocumentSnapshot:
 
     # Уже написанные секции документа (для validate_consistency)
     written_sections: list[WrittenSection] = field(default_factory=list)
+    user_message: str = ""

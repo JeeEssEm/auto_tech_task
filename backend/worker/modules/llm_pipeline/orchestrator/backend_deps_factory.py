@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 
 from prisma import Prisma
 
@@ -23,6 +24,10 @@ from backend.worker.modules.llm_pipeline.steps.behaviors.harvester.harvester_beh
 from backend.worker.modules.llm_pipeline.steps.embedder.node_embedder import NodeEmbedder
 from backend.worker.modules.llm_pipeline.steps.intent_router.config import IntentRouterSettings
 from backend.worker.modules.llm_pipeline.steps.intent_router.intent_router import IntentRouter
+
+
+LOG_DIR = Path("logs")
+LOG_DIR.mkdir(parents=True, exist_ok=True)
 
 
 @dataclass
@@ -82,7 +87,7 @@ async def create_backend_runtime(db: Prisma | None = None) -> BackendOrchestrato
         intent_settings.temperature,
         intent_settings.max_tokens,
         intent_settings.timeout_seconds,
-        "orchestrator_router.log",
+        str(LOG_DIR / "orchestrator_router.log"),
     )
     consultant_adapter = _build_adapter(
         consultant_settings.base_url,
@@ -90,7 +95,7 @@ async def create_backend_runtime(db: Prisma | None = None) -> BackendOrchestrato
         consultant_settings.temperature,
         consultant_settings.max_tokens,
         consultant_settings.timeout_seconds,
-        "orchestrator_consultant.log",
+        str(LOG_DIR / "orchestrator_consultant.log"),
     )
     architect_adapter = _build_adapter(
         architect_settings.base_url,
@@ -98,7 +103,7 @@ async def create_backend_runtime(db: Prisma | None = None) -> BackendOrchestrato
         architect_settings.temperature,
         architect_settings.max_tokens,
         architect_settings.timeout_seconds,
-        "orchestrator_architect.log",
+        str(LOG_DIR / "orchestrator_architect.log"),
     )
     harvester_adapter = _build_adapter(
         harvester_settings.base_url,
@@ -106,7 +111,7 @@ async def create_backend_runtime(db: Prisma | None = None) -> BackendOrchestrato
         0.1,
         harvester_settings.max_tokens,
         harvester_settings.timeout_seconds,
-        "orchestrator_harvester.log",
+        str(LOG_DIR / "orchestrator_harvester.log"),
     )
     grouping_adapter = _build_adapter(
         grouping_settings.base_url,
@@ -114,7 +119,7 @@ async def create_backend_runtime(db: Prisma | None = None) -> BackendOrchestrato
         grouping_settings.temperature,
         grouping_settings.max_tokens,
         grouping_settings.timeout_seconds,
-        "orchestrator_grouping.log",
+        str(LOG_DIR / "orchestrator_grouping.log"),
     )
 
     embedder_settings = EmbedderSettings()
@@ -125,9 +130,6 @@ async def create_backend_runtime(db: Prisma | None = None) -> BackendOrchestrato
 
     async def _get_project_snapshot(project_id: int):
         return await gkg_repo.get_project_snapshot(project_id)
-
-    async def _get_affected_sections(project_id: int, gkg_nodes):
-        return await gkg_repo.get_affected_sections(project_id, gkg_nodes)
 
     async def _persist_gkg(project_id: int, gkg_nodes, pending_conflicts):
         await gkg_repo.persist_gkg(project_id, gkg_nodes, pending_conflicts)
@@ -170,6 +172,9 @@ async def create_backend_runtime(db: Prisma | None = None) -> BackendOrchestrato
     async def _apply_template_structure(project_id: int, template_type: str):
         await gkg_repo.apply_template_sections(project_id, template_type)
 
+    async def _list_sections(project_id: int) -> list[tuple[str, str, int, bool, str, str, bool]]:
+        return await gkg_repo.list_sections(project_id)
+
     deps = OrchestratorDeps(
         intent_router=IntentRouter(intent_adapter, intent_settings),
         guardian=GuardianBehavior(intent_adapter, intent_settings),
@@ -179,7 +184,6 @@ async def create_backend_runtime(db: Prisma | None = None) -> BackendOrchestrato
         architect=ArchitectBehavior(architect_adapter, architect_context, architect_settings),
         embedder=NodeEmbedder(embedder_port, embedder_settings),
         get_project_snapshot=_get_project_snapshot,
-        get_affected_sections=_get_affected_sections,
         persist_gkg=_persist_gkg,
         load_existing_gkg_nodes=_load_existing,
         get_gkg_snapshot=_gkg_snapshot,
@@ -193,6 +197,7 @@ async def create_backend_runtime(db: Prisma | None = None) -> BackendOrchestrato
         resolve_pending_action=_resolve_pending_action,
         mark_block_manual=_mark_block_manual,
         apply_template_structure=_apply_template_structure,
+        list_sections=_list_sections
     )
 
     return BackendOrchestratorRuntime(deps=deps, db=prisma, owns_db=owns_db)

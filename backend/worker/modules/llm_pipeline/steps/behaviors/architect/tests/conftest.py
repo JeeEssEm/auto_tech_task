@@ -7,6 +7,10 @@ These tests use a real LLM adapter and mocked architect tools
 
 import asyncio
 import logging
+from typing import Type, TypeVar
+
+import httpx
+from pydantic import BaseModel
 
 import pytest
 
@@ -15,6 +19,73 @@ from backend.worker.modules.llm_pipeline.providers.openai_adapter import OpenAIC
 from backend.worker.modules.llm_pipeline.steps.behaviors.architect.architect_behavior import ArchitectBehavior
 from backend.worker.modules.llm_pipeline.steps.behaviors.architect.config import ArchitectSettings
 from backend.worker.modules.llm_pipeline.steps.behaviors.architect.tests.mock_tools import MockArchitectTools
+
+
+ResponseT = TypeVar("ResponseT", bound=BaseModel)
+
+
+class OpenAICompatChatAdapter:
+    """
+    Compatibility adapter for ArchitectBehavior.
+
+    Architect now requests response_model=str, while OpenAIChatAdapter expects a
+    Pydantic response model. This wrapper keeps real LLM calls and supports both:
+    - str: returns raw assistant content
+    - BaseModel: delegates to OpenAIChatAdapter
+    """
+
+    def __init__(self, settings: OpenAIChatSettings):
+        self._settings = settings
+        self._typed_adapter = OpenAIChatAdapter(settings)
+        self._timeout = httpx.Timeout(settings.timeout_seconds)
+
+    async def chat(
+        self,
+        messages: list[dict[str, str]],
+        model: str,
+        temperature: float,
+        max_tokens: int,
+        response_model: Type[ResponseT] | type[str],
+        event_id: str | None = None,
+    ):
+        if response_model is str:
+            headers = {"Content-Type": "application/json"}
+            if self._settings.api_key:
+                headers["Authorization"] = f"Bearer {self._settings.api_key}"
+            if event_id:
+                headers["Idempotency-Key"] = event_id
+
+            payload = {
+                "model": model,
+                "temperature": temperature,
+                "max_tokens": max_tokens,
+                "messages": messages,
+            }
+
+            async with httpx.AsyncClient(timeout=self._timeout) as client:
+                response = await client.post(
+                    f"{self._settings.base_url}/chat/completions",
+                    headers=headers,
+                    json=payload,
+                )
+
+            response.raise_for_status()
+            body = response.json()
+            choices = body.get("choices") or []
+            if not choices:
+                raise ValueError("Empty choices in provider response")
+
+            content = choices[0].get("message", {}).get("content")
+            return str(content or "")
+
+        return await self._typed_adapter.chat(
+            messages=messages,
+            model=model,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            response_model=response_model,
+            event_id=event_id,
+        )
 
 
 @pytest.fixture(scope="session")
@@ -44,7 +115,7 @@ def architect_settings():
 
 @pytest.fixture
 def llm_chat_adapter(architect_settings):
-    """Create OpenAIChatAdapter with settings from Architect config."""
+    """Create compatible real LLM adapter with settings from Architect config."""
     settings = OpenAIChatSettings(
         base_url=architect_settings.base_url,
         api_key=architect_settings.api_key,
@@ -54,7 +125,7 @@ def llm_chat_adapter(architect_settings):
         max_attempts=3,
         log_path="architect_test.log",
     )
-    adapter = OpenAIChatAdapter(settings)
+    adapter = OpenAICompatChatAdapter(settings)
     print(f"\nOpenAIChatAdapter initialized with {settings.base_url}")
     return adapter
 

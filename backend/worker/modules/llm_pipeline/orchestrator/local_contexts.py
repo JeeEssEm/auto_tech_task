@@ -65,3 +65,6 @@ class LocalArchitectContext(ArchitectContext):
         written_sections: list[WrittenSection],
     ) -> ConsistencyCheckResult:
         return await self._store.architect_validate_consistency(draft_text, written_sections)
+
+    async def search_gkg(self, query: str, limit: int = 10) -> list[GKGSearchResult]:
+        return await self._store.architect_search_gkg(self._project_id(), query, limit)

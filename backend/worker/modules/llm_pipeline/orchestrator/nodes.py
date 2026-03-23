@@ -14,13 +14,18 @@ from datetime import datetime, UTC
 import structlog
 from langgraph.types import Send
 
+from backend.worker.modules.llm_pipeline.orchestrator.schemas import ArchitectCampaignInput
 from backend.worker.modules.llm_pipeline.orchestrator.state import (
     OrchestratorState, ArchitectNodeInput,
     GuardianNodeInput
 )
+from backend.worker.modules.llm_pipeline.orchestrator.utils import (
+    _pick_section_id_via_llm
+)
 from backend.worker.modules.llm_pipeline.steps.behaviors.architect.abstractions.context import ArchitectContext
 from backend.worker.modules.llm_pipeline.steps.behaviors.architect.abstractions.schemas import DocumentSnapshot
 from backend.worker.modules.llm_pipeline.steps.behaviors.architect.architect_behavior import ArchitectBehavior
+from backend.worker.modules.llm_pipeline.steps.behaviors.architect.campaign import ArchitectCampaign, SectionState
 
 from backend.worker.modules.llm_pipeline.steps.behaviors.architect.schemas import ArchitectResponse
 from backend.worker.modules.llm_pipeline.steps.behaviors.consultant.abstractions.context import ConsultantContext
@@ -61,7 +66,6 @@ class OrchestratorDeps:
 
     # Колбэки для доступа к БД (реализуются на уровне API)
     get_project_snapshot: "Callable[[int], Awaitable[ProjectSnapshot]]"
-    get_affected_sections: "Callable[[int, list[GKGNode]], Awaitable[list[DocumentSnapshot]]]"
     persist_gkg: "Callable[[int, list[GKGNode], list[PendingConflict]], Awaitable[None]]"
     load_existing_gkg_nodes: "Callable[[int, set[tuple[str, str]]], Awaitable[list[EmbeddedStagingNode]]]"
 
@@ -77,6 +81,7 @@ class OrchestratorDeps:
     resolve_pending_action: "Callable[[int, str, str], Awaitable[list[GKGNode]]] | None" = None
     mark_block_manual: "Callable[[int, str, str], Awaitable[None]] | None" = None
     apply_template_structure: "Callable[[int, str], Awaitable[None]] | None" = None
+    list_sections: "Callable[[int], Awaitable[list[tuple[str, str, int, bool, str, str, bool]]]] | None" = None
 
 
 def make_route_node(deps: OrchestratorDeps):
@@ -103,53 +108,39 @@ def make_route_node(deps: OrchestratorDeps):
 
 
 def fan_out(state: OrchestratorState) -> list[Send]:
-    """
-    Conditional edge из route → возвращает список Send().
-
-    Send(node_name, state_patch) — LangGraph запускает эти узлы параллельно,
-    каждый получает полный State + патч как начальное состояние.
-
-    Зависимость Architect от Harvester решается структурой графа:
-    architect_gate стоит ПОСЛЕ grouping_judge, который стоит ПОСЛЕ harvester.
-    Прямая активация Architect (explicit_regen_request без новых фактов)
-    идёт отдельным путём — тоже через Send, но на другой узел.
-    """
     sends: list[Send] = []
     behaviors = state.get("behaviors", [])
-
     roles = {b.role for b in behaviors}
     reasons = {b.reason for b in behaviors}
+    has_attachments = bool(state.get("attachments"))
 
     if BehaviorRole.GUARDIAN in roles:
-        guardian_behaviors = [b for b in behaviors if b.role == BehaviorRole.GUARDIAN]
-        for b in guardian_behaviors:
-            sends.append(
-                Send(
-                    "guardian_node", GuardianNodeInput(
-                        project_id=state["project_id"],
-                        guardian_behavior=b,
-                    )
-                )
-            )
+        seen: set[str] = set()
+        for b in behaviors:
+            if b.role == BehaviorRole.GUARDIAN and b.user_prompt not in seen:
+                seen.add(b.user_prompt)
+                sends.append(Send("guardian_node", GuardianNodeInput(
+                    project_id=state["project_id"],
+                    guardian_behavior=b,
+                )))
 
     if BehaviorRole.CONSULTANT in roles:
         sends.append(Send("consultant_node", state))
 
-    if BehaviorRole.HARVESTER in roles:
+    if BehaviorRole.HARVESTER in roles or has_attachments:
         sends.append(Send("harvester_node", state))
+        # После harvester → grouping_judge → persist → architect_gate
+        # architect запустится оттуда — не добавляем его сюда
+        return sends
 
-    # Explicit regen без новых фактов — напрямую к архитектору
-    if (
-            BehaviorRole.ARCHITECT in roles
-            and BehaviorReason.EXPLICIT_REGEN_REQUEST in reasons
-            and BehaviorRole.HARVESTER not in roles
-    ):
-        architect_behaviors = [b for b in behaviors if b.role == BehaviorRole.ARCHITECT]
-        for b in architect_behaviors:
-            sends.append(Send("direct_architect_node", {**state, "_architect_quote": b.user_prompt}))
+    # Нет harvester pipeline — explicit regen или просто запрос к architect
+    if BehaviorRole.ARCHITECT in roles or not sends:
+        sends.append(Send("architect_node", ArchitectCampaignInput(
+            project_id=state["project_id"],
+            user_message=state["user_input"],
+            trigger_reason="explicit_regen_request",
+        )))
 
-    # Если ни один behavior не подошёл — возвращаем пустой список,
-    # граф сразу переходит к compose
     return sends or [Send("compose_node", state)]
 
 
@@ -262,70 +253,64 @@ def make_persist_gkg_node(deps: OrchestratorDeps):
 
 def make_architect_gate(deps: OrchestratorDeps):
     async def architect_gate(state: OrchestratorState) -> list[Send]:
-        """
-        Conditional edge после persist_gkg.
-        Если GKG обновился — находим затронутые секции и запускаем Architect
-        параллельно для каждой через Send().
-        """
-        gkg_nodes = state.get("gkg_nodes", [])
-        if not gkg_nodes:
-            return [Send("compose_node", state)]
-
-        snapshots: list[DocumentSnapshot] = await deps.get_affected_sections(
-            state["project_id"], gkg_nodes
-        )
-        if not snapshots:
-            return [Send("compose_node", state)]
-
-        log.info(
-            "architect_gate | project=%s affected_sections=%d",
-            state["project_id"],
-            len(snapshots),
-        )
-        return [
-            Send(
-                "architect_node", ArchitectNodeInput(
-                    project_id=state["project_id"],
-                    section_snapshot=snap,
-                )
-            )
-            for snap in snapshots
-        ]
+        return [Send("architect_node", ArchitectCampaignInput(
+            project_id=state["project_id"],
+            user_message=state["user_input"],
+            trigger_reason="spec_block_affected",
+        ))]
 
     return architect_gate
 
 
 def make_architect_node(deps: OrchestratorDeps):
-    async def architect_node(state: ArchitectNodeInput) -> dict:
+    async def architect_node(state: ArchitectCampaignInput) -> dict:
         if deps.architect_context and hasattr(deps.architect_context, "set_project_id"):
             deps.architect_context.set_project_id(state["project_id"])
 
-        snapshot: DocumentSnapshot = state["section_snapshot"]
-        response = await deps.architect.run(snapshot)
-        log.info(
-            "architect | section=%s status=%s tool_calls=%d",
-            snapshot.section_id,
-            response.status,
-            response.used_tool_calls,
-        )
-        return {"architect_responses": [response]}
-
-    return architect_node
-
-
-def make_direct_architect_node(deps: OrchestratorDeps):
-    async def direct_architect_node(state: ArchitectNodeInput) -> dict:
-        if deps.architect_context and hasattr(deps.architect_context, "set_project_id"):
-            deps.architect_context.set_project_id(state["project_id"])
-
-        snapshot: DocumentSnapshot | None = state.get("section_snapshot")
-        if snapshot is None:
+        # Получаем структуру документа
+        if not deps.list_sections or not deps.build_document_snapshot:
+            log.warning("architect_node | list_sections or build_document_snapshot not configured")
             return {"architect_responses": []}
 
-        response = await deps.architect.run(snapshot)
-        return {"architect_responses": [response]}
+        try:
+            sections_raw = await deps.list_sections(state["project_id"])
+        except Exception as e:
+            log.warning("architect_node | list_sections failed: %s", e)
+            return {"architect_responses": []}
 
-    return direct_architect_node
+        document = [
+            SectionState(
+                section_id=sid,
+                title=title,
+                level=level,
+                required=required,
+                context_hint=context_hint,
+                content_md=content_md,
+                is_manual=is_manual,
+            )
+            for sid, title, level, required, context_hint, content_md, is_manual
+            in sections_raw
+        ]
+
+        campaign = ArchitectCampaign(
+            user_message=state.get("user_message", ""),
+            trigger_reason=state.get("trigger_reason", "spec_block_affected"),
+            document=document,
+        )
+
+        responses = await deps.architect.run_campaign(campaign)
+
+        # Сохраняем обновления
+        if deps.save_document_updates and responses:
+            await deps.save_document_updates(state["project_id"], responses)
+
+        log.info(
+            "architect_node | written=%d sections",
+            len(responses),
+        )
+        return {"architect_responses": responses}
+
+    return architect_node
 
 
 def make_compose_node(_deps: OrchestratorDeps):

@@ -196,14 +196,27 @@ class LocalJSONGraphStore:
                 lines.append(f"- [{node.status}] {node.scope} / {node.property}: {node.value}")
             return "\n".join(lines) if lines else "GKG is empty"
 
+    # async def get_doc_snapshot_text(self, project_id: int) -> str:
+    #     async with self._lock:
+    #         project = self._ensure_project_locked(project_id)
+    #         sections = sorted(project["sections"].values(), key=lambda s: (s["level"], s["section_id"]))
+    #         lines: list[str] = []
+    #         for sec in sections:
+    #             content = sec.get("content_md", "")
+    #             lines.append(f"- {sec['title']} (len={len(content)})")
+    #         return "\n".join(lines) if lines else "Document is empty"
+
     async def get_doc_snapshot_text(self, project_id: int) -> str:
         async with self._lock:
             project = self._ensure_project_locked(project_id)
-            sections = sorted(project["sections"].values(), key=lambda s: (s["level"], s["section_id"]))
+            sections = sorted(
+                project["sections"].values(),
+                key=lambda s: (s["level"], s["section_id"]),
+            )
             lines: list[str] = []
             for sec in sections:
                 content = sec.get("content_md", "")
-                lines.append(f"- {sec['title']} (len={len(content)})")
+                lines.append(f"- [{sec['section_id']}] {sec['title']} (len={len(content)})")
             return "\n".join(lines) if lines else "Document is empty"
 
     async def get_pending_action_questions(self, project_id: int) -> list[str]:
@@ -596,3 +609,19 @@ class LocalJSONGraphStore:
                 reason=f"Draft DB terms {sorted(mentioned)} contradict existing {sorted(existing_mentioned)}",
             )
         return ConsistencyCheckResult(status="OK", reason="")
+
+    async def list_sections(self, project_id: int) -> list[tuple[str, str]]:
+        async with self._lock:
+            project = self._ensure_project_locked(project_id)
+            return [
+                (sec["section_id"], sec["title"])
+                for sec in project["sections"].values()
+            ]
+
+    async def architect_search_gkg(
+            self,
+            project_id: int,
+            query: str,
+            limit: int,
+    ) -> list[GKGSearchResult]:
+        return await self.consultant_search_gkg(project_id, query, limit)

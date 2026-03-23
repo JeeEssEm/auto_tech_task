@@ -5,7 +5,7 @@ from langgraph.graph.state import CompiledStateGraph
 from backend.worker.modules.llm_pipeline.orchestrator.nodes import (
     OrchestratorDeps, make_route_node,
     make_guardian_node, make_consultant_node, make_harvester_node, make_grouping_judge_node, make_persist_gkg_node,
-    make_architect_node, make_direct_architect_node, make_compose_node, fan_out, make_architect_gate
+    make_architect_node, make_compose_node, fan_out, make_architect_gate
 )
 from backend.worker.modules.llm_pipeline.orchestrator.state import OrchestratorState
 
@@ -29,7 +29,6 @@ def build_graph(deps: OrchestratorDeps) -> "CompiledStateGraph":
     builder.add_node("grouping_judge_node", make_grouping_judge_node(deps))
     builder.add_node("persist_gkg_node", make_persist_gkg_node(deps))
     builder.add_node("architect_node", make_architect_node(deps))
-    builder.add_node("direct_architect_node", make_direct_architect_node(deps))
     builder.add_node("compose_node", make_compose_node(deps))
 
     # ------------------------------------------------------------------ #
@@ -45,7 +44,6 @@ def build_graph(deps: OrchestratorDeps) -> "CompiledStateGraph":
             "guardian_node",
             "consultant_node",
             "harvester_node",
-            "direct_architect_node",
             "compose_node"
         ],
     )
@@ -65,7 +63,6 @@ def build_graph(deps: OrchestratorDeps) -> "CompiledStateGraph":
     builder.add_edge("guardian_node", "compose_node")
     builder.add_edge("consultant_node", "compose_node")
     builder.add_edge("architect_node", "compose_node")
-    builder.add_edge("direct_architect_node", "compose_node")
 
     builder.add_edge("compose_node", END)
 

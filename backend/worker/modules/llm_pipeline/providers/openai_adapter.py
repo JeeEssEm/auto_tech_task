@@ -109,6 +109,12 @@ class OpenAIChatAdapter(LLMChatPort):
             event_id, actual_model, latency_ms,
             prompt_tokens, completion_tokens,
         )
+        self._log.debug(
+            "← response_content | event=%s model=%s content=%s",
+            event_id,
+            actual_model,
+            content,
+        )
 
         # Parse and validate response into schema
         try:
@@ -121,7 +127,7 @@ class OpenAIChatAdapter(LLMChatPort):
         except (json.JSONDecodeError, ValidationError) as e:
             self._log.warning(
                 "✗ schema_parse failed | event=%s model=%s schema=%s error=%s raw_content=%s",
-                event_id, actual_model, response_model.__name__, str(e), content[:500],
+                event_id, actual_model, response_model.__name__, str(e), content,
             )
             # Mark as retryable - tenacity will retry the entire call
             raise ValueError(

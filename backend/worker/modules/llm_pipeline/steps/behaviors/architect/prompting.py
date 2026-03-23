@@ -8,7 +8,7 @@ prompting.py — промпты для ArchitectBehavior.
 (scope/property/value). Чтобы превратить «БД: ClickHouse» в связный абзац,
 Архитектор должен углубиться в досье узла через get_context_details.
 """
-
+from backend.worker.modules.llm_pipeline.steps.behaviors.architect.campaign import ArchitectCampaign
 from backend.worker.modules.llm_pipeline.steps.behaviors.architect.schemas import (
     GKGFact,
     ContextDetail,
@@ -21,7 +21,17 @@ from backend.worker.modules.llm_pipeline.steps.behaviors.architect.schemas impor
 _TOOLS_SCHEMA = """
 ## Tools
 
-### 1. get_context_details
+### 1. search_gkg
+Semantic search over resolved facts in the Global Knowledge Graph.
+Use this FIRST to find relevant facts for the current section.
+
+Args:
+  query : string  — search query in Russian or English (1–20 words)
+  limit : integer — number of results, 1..20, default 10
+
+Returns: list of matching facts (scope, property, value, topic_id).
+
+### 2. get_context_details
 Retrieve the full dossier for a GKG node: all evidence quotes, authors,
 timestamps, and alternatives that were considered but rejected.
 
@@ -34,7 +44,7 @@ Args:
 
 Returns: winning value + rationale + evidence list + rejected alternatives.
 
-### 2. search_raw_sources
+### 3. search_raw_sources
 Full-text / vector search over raw source chunks (documents, transcripts, chats).
 
 Use when: [SECTION FACTS] has no relevant topics AND get_context_details
@@ -46,7 +56,7 @@ Args:
 
 Returns: raw text fragments with source name and chunk index.
 
-### 3. ask_user
+### 4. ask_user
 Create a pending question for the user when critical data is absent from both
 GKG and raw sources. Suspends generation of this block.
 
@@ -60,7 +70,7 @@ Args:
 
 Returns: action_id string. You MUST include it in pending_actions of your output.
 
-### 4. validate_consistency
+### 5. validate_consistency
 Check the draft you just wrote against already-completed sections of the document.
 Catches contradictions like "React SPA in intro" vs "server-side rendering in tech stack".
 
@@ -319,6 +329,7 @@ def build_architect_user_prompt(
     facts: list[GKGFact],
     written_sections: list[WrittenSection],
     trigger_reason: str,
+    user_message: str = ""
 ) -> str:
     """
     trigger_reason: "explicit_regen_request" | "spec_block_affected" | "initial_generation"
@@ -342,6 +353,16 @@ def build_architect_user_prompt(
             "🆕 First-time generation. Cover all context_hint topics you find data for."
         ),
     }.get(trigger_reason, "")
+    scope_warning = (
+        "\n⚠️ IMPORTANT: Write content ONLY for this specific section. "
+        "Do NOT include content that belongs to other sections. "
+        f"Other sections ({', '.join(s.section_id for s in written_sections)}) "
+        "already exist or will be written separately."
+    )
+
+    user_request_block = ""
+    if user_message:
+        user_request_block = f"\n[USER REQUEST]\n{user_message}\nFocus on what the user specifically asked.\n"
 
     return f"""\
 [CURRENT SECTION]
@@ -353,6 +374,8 @@ hint     : {context_hint}
 
 [TRIGGER]
 {trigger_note}
+{user_request_block}
+{scope_warning}
 
 [SECTION FACTS]
 {facts_text}
@@ -361,4 +384,96 @@ hint     : {context_hint}
 {written_text}
 
 Write the section now.
+""".strip()
+
+
+def format_document_state(sections: list) -> str:  # list[SectionState]
+    lines = []
+    for sec in sections:
+        status = "🔒 manual" if sec.is_manual else ("✅ written" if sec.content_md else "⬜ empty")
+        preview = ""
+        if sec.content_md and not sec.is_manual:
+            preview = " | " + sec.content_md[:80].replace("\n", " ") + ("..." if len(sec.content_md) > 80 else "")
+        lines.append(
+            f"  [{sec.section_id}] {'#' * sec.level} {sec.title} "
+            f"({'required' if sec.required else 'optional'}) — {status}{preview}"
+        )
+    return "\n".join(lines)
+
+
+def build_plan_system_prompt() -> str:
+    return """\
+You are The Architect — a technical writer agent for an auto-spec generation system.
+
+## Phase 1: Planning
+
+You will receive:
+- The user's request (may be empty for automated triggers)
+- The current state of the specification document (all sections with statuses)
+- The trigger reason
+
+Your task: decide WHICH sections to write and in WHAT ORDER.
+
+## Rules
+1. Never touch sections marked as 🔒 manual.
+2. For trigger=initial_generation: include all empty required sections, 
+   then all empty optional sections.
+3. For trigger=spec_block_affected: include sections that are logically 
+   affected by the GKG changes — look at context_hint and current content.
+4. For trigger=explicit_regen_request: use user_message to understand 
+   what sections to update. Can be one or many.
+5. Write sections in order: level 1 before level 2, parents before children.
+6. If nothing needs writing — return empty sections_to_write.
+
+## Output format
+Return valid JSON only, no markdown:
+{
+  "sections_to_write": ["section_id_1", "section_id_2", ...],
+  "reasoning": "<brief explanation of why these sections>"
+}
+""".strip()
+
+
+def build_plan_user_prompt(
+    campaign: ArchitectCampaign,
+    section_facts: dict[str, list[GKGFact]] | None = None,
+) -> str:
+    trigger_descriptions = {
+        "initial_generation": "🆕 Initial generation — fill the specification from scratch.",
+        "spec_block_affected": "🔄 GKG was updated — some sections may be outdated.",
+        "explicit_regen_request": "⚡ User explicitly requested changes.",
+    }
+
+    user_msg_block = f"\n[USER REQUEST]\n{campaign.user_message}\n" if campaign.user_message else ""
+
+    lines = []
+    for sec in campaign.document:
+        if sec.is_manual:
+            status = "🔒 manual — skip"
+            facts_note = ""
+        else:
+            status = "✅ written" if sec.content_md else "⬜ empty"
+            if section_facts is not None:
+                count = len(section_facts.get(sec.section_id, []))
+                facts_note = f" | GKG facts available: {count}"
+            else:
+                facts_note = ""
+
+        lines.append(
+            f"  [{sec.section_id}] {'#' * sec.level} {sec.title} "
+            f"({'required' if sec.required else 'optional'}) — {status}{facts_note}"
+        )
+
+    doc_state = "\n".join(lines)
+
+    return f"""\
+[TRIGGER]
+{trigger_descriptions.get(campaign.trigger_reason, campaign.trigger_reason)}
+{user_msg_block}
+[DOCUMENT STATE]
+{doc_state}
+
+Decide which sections to write.
+Only include sections that have GKG facts available (count > 0),
+unless this is an explicit_regen_request from the user.
 """.strip()

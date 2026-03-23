@@ -19,6 +19,7 @@ from backend.worker.modules.llm_pipeline.steps.behaviors.architect.schemas impor
     ContextDetail, SourceChunk,
     ConsistencyCheckResult, WrittenSection
 )
+from backend.worker.modules.llm_pipeline.steps.behaviors.consultant.abstractions.schemas import GKGSearchResult
 
 
 class ArchitectContext(ABC):
@@ -29,6 +30,18 @@ class ArchitectContext(ABC):
     Реализация делает SQL/векторные запросы к Postgres (pgvector).
     В тестах — MockArchitectContext с фиксированными ответами.
     """
+
+    @abstractmethod
+    async def search_gkg(
+            self,
+            query: str,
+            limit: int = 10,
+    ) -> list[GKGSearchResult]:
+        """
+        Семантический поиск по gkg_nodes WHERE status != 'ARCHIVED'.
+        Используется в фазе написания секции.
+        """
+        ...
 
     @abstractmethod
     async def get_context_details(

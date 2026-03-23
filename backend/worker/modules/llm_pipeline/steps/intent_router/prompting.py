@@ -138,6 +138,15 @@ Return valid JSON only — no markdown, no explanation outside JSON.
 6. Guardian activates only for the off-topic/harmful segment, not the full message.
 7. Harvester + Architect often activate together on the same quote (fact change → doc update).
 8. If nothing applies → return {{"behaviors": []}}.
+9. Document restructuring, reorganisation, or block-moving requests
+   ("вынеси в блок", "перенеси раздел", "добавь раздел X", "давай оформим это как")
+   trigger Architect/explicit_regen_request ONLY — do NOT activate Harvester,
+   because no new facts are being introduced, only structure changes.
+10. Never return two behaviors with the same role AND the same quote. 
+    Each segment maps to at most one behavior per role.
+11. Harvester activates only when the user provides NEW factual information
+    (values, decisions, constraints, deadlines, names). 
+    Questions, structural requests, and reformulations are NOT new facts.
 
 ## Examples
 {_format_examples()}

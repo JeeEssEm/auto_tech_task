@@ -309,51 +309,99 @@ async def update_tz_with_sources_task(
 async def regenerate_block_task(
     project_id: int,
     block_id: str,
-    trigger_reason: str,  # explicit_regen_request | spec_block_affected
+    trigger_reason: str,
 ) -> dict:
-    """
-    Инвариант 2 — перегенерация конкретного блока.
-    Прямой вызов Architect, без IntentRouter и Harvester.
-    """
+    """Перегенерация конкретного блока — кампейн с одной секцией."""
     deps: OrchestratorDeps = broker.state.deps
-    if deps.build_document_snapshot is None:
-        raise RuntimeError("build_document_snapshot callback is not configured")
+    if deps.list_sections is None:
+        raise RuntimeError("list_sections callback is not configured")
 
-    snapshot = await deps.build_document_snapshot(
-        project_id=project_id,
-        block_id=block_id,
-        trigger_reason=trigger_reason,
+    sections_raw = await deps.list_sections(project_id)
+    target = next((s for s in sections_raw if s[0] == block_id), None)
+    if target is None:
+        raise RuntimeError(f"Section {block_id} not found")
+
+    sid, title, level, required, context_hint, content_md, is_manual = target
+    if is_manual:
+        raise RuntimeError(f"Section {block_id} is locked (is_manual=True)")
+
+    from backend.worker.modules.llm_pipeline.steps.behaviors.architect.campaign import (
+        ArchitectCampaign, SectionState,
     )
-    response = await deps.architect.run(snapshot)
-    return response.model_dump()
+
+    document = [
+        SectionState(
+            section_id=s[0],
+            title=s[1],
+            level=s[2],
+            required=s[3],
+            context_hint=s[4],
+            content_md=s[5],
+            is_manual=s[6],
+        )
+        for s in sections_raw
+    ]
+
+    # Форсируем план — только запрошенный блок
+    campaign = ArchitectCampaign(
+        user_message=f"Перегенерируй раздел: {title}",
+        trigger_reason=trigger_reason,
+        document=document,
+        forced_sections=[block_id]
+    )
+
+    responses = await deps.architect.run_campaign(campaign)
+    if deps.save_document_updates and responses:
+        await deps.save_document_updates(project_id, responses)
+
+    return responses[0].model_dump() if responses else {"status": "nothing_to_update"}
 
 
 @broker.task
 async def resolve_conflict_task(
     project_id: int,
     action_id: str,
-    resolution: str,        # выбранный вариант или свой текст
+    resolution: str,
 ) -> dict:
-    """
-    Инвариант pending_action — пользователь ответил на вопрос системы.
-    GKG update → затронутые блоки → Architect для каждого.
-    """
+    """Пользователь ответил на вопрос — обновляем GKG, запускаем кампейн."""
     deps: OrchestratorDeps = broker.state.deps
     if deps.resolve_pending_action is None:
         raise RuntimeError("resolve_pending_action callback is not configured")
+    if deps.list_sections is None:
+        raise RuntimeError("list_sections callback is not configured")
 
-    # 1. Записываем решение в GKG с authority_weight=1.0
-    affected_nodes = await deps.resolve_pending_action(
-        project_id, action_id, resolution
+    # 1. Записываем решение в GKG
+    await deps.resolve_pending_action(project_id, action_id, resolution)
+
+    # 2. Запускаем кампейн — architect сам решит что устарело
+    from backend.worker.modules.llm_pipeline.steps.behaviors.architect.campaign import (
+        ArchitectCampaign, SectionState,
     )
 
-    # 2. Находим затронутые блоки
-    snapshots = await deps.get_affected_sections(project_id, affected_nodes)
+    sections_raw = await deps.list_sections(project_id)
+    document = [
+        SectionState(
+            section_id=s[0],
+            title=s[1],
+            level=s[2],
+            required=s[3],
+            context_hint=s[4],
+            content_md=s[5],
+            is_manual=s[6],
+        )
+        for s in sections_raw
+    ]
 
-    # 3. Регенерируем параллельно
-    responses = await asyncio.gather(*[
-        deps.architect.run(snap) for snap in snapshots
-    ])
+    campaign = ArchitectCampaign(
+        user_message=f"Пользователь ответил на вопрос: {resolution}",
+        trigger_reason="spec_block_affected",
+        document=document,
+    )
+
+    responses = await deps.architect.run_campaign(campaign)
+    if deps.save_document_updates and responses:
+        await deps.save_document_updates(project_id, responses)
+
     return {"updated_blocks": [r.model_dump() for r in responses]}
 
 

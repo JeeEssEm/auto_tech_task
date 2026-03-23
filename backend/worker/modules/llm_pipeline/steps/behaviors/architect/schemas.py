@@ -58,6 +58,7 @@ class PendingAction(BaseModel):
 class ToolCallOutput(BaseModel):
     is_final: Literal[False] = False
     tool_name: Literal[
+        "search_gkg",
         "get_context_details",
         "search_raw_sources",
         "ask_user",

@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from typing import TypedDict
 
 from backend.worker.modules.llm_pipeline.orchestrator.state import OrchestratorState
 from backend.worker.modules.llm_pipeline.steps.behaviors.architect.schemas import ArchitectResponse
@@ -20,3 +21,9 @@ class OrchestratorResult:
             doc_updates=state.get("architect_responses", []),
             pending_conflicts=state.get("pending_conflicts", []),
         )
+
+
+class ArchitectCampaignInput(TypedDict):
+    project_id: int
+    user_message: str
+    trigger_reason: str
