@@ -47,6 +47,19 @@ export type UpdateDocumentSectionDto = {
   is_manual?: boolean
 }
 
+export type SectionVersionMeta = {
+  id: string
+  key: string
+  created_at: string
+  sections_count: number
+  title: string
+}
+
+export type SectionVersionPreview = {
+  version: SectionVersionMeta
+  sections: UpdateDocumentSectionDto[]
+}
+
 export const tzApi = {
   /** Получение статуса последней генерации */
   getGenerationStatus: async (chatId: string): Promise<{ status: string | null }> => {
@@ -139,6 +152,26 @@ export const tzApi = {
     return apiClient.post(`/tz/${chatId}/update-sections`, {
       sections,
     })
+  },
+
+  /** Сохранение текущей версии секций в S3 */
+  saveSectionsVersion: async (chatId: string): Promise<{ status: string; version_id: string; created_at: string }> => {
+    return apiClient.post(`/tz/${chatId}/sections/versions`, {})
+  },
+
+  /** Список сохраненных версий секций */
+  getSectionsVersions: async (chatId: string): Promise<{ versions: SectionVersionMeta[] }> => {
+    return apiClient.get(`/tz/${chatId}/sections/versions`)
+  },
+
+  /** Предпросмотр версии секций */
+  previewSectionsVersion: async (chatId: string, versionId: string): Promise<SectionVersionPreview> => {
+    return apiClient.get(`/tz/${chatId}/sections/versions/${versionId}`)
+  },
+
+  /** Восстановление секций из сохраненной версии */
+  restoreSectionsVersion: async (chatId: string, versionId: string): Promise<{ status: string }> => {
+    return apiClient.post(`/tz/${chatId}/sections/versions/${versionId}/restore`, {})
   },
 
   /** Запуск экспорта ТЗ */

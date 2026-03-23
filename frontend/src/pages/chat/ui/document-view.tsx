@@ -19,6 +19,7 @@ import { Button } from "@/components/ui/button"
 import { RichTextEditor } from "@/components/ui/rich-text-editor"
 import { cn } from "@/lib/utils"
 import type { GenerationRun } from "@/shared/api/chat-service"
+import type { SectionVersionMeta } from "@/shared/api/tz-service"
 import type { TZResult, TZSection } from "../lib/types"
 
 type DocumentViewProps = {
@@ -28,6 +29,10 @@ type DocumentViewProps = {
   onRegenerateBlock: (fieldPath: string, instruction?: string) => void
   onGenerateCustomBlock: (fieldPath: string, customTopic: string) => void
   onSaveSections: (sections: TZSection[]) => Promise<void>
+  onSaveCurrentVersion: () => Promise<void>
+  onLoadVersions: () => Promise<SectionVersionMeta[]>
+  onPreviewVersion: (versionId: string) => Promise<TZSection[]>
+  onRestoreVersion: (versionId: string) => Promise<void>
   onExport: (resultKey: string, format: "markdown" | "word" | "pdf") => void
 }
 
@@ -111,6 +116,10 @@ export function DocumentView({
   onRegenerateBlock,
   onGenerateCustomBlock,
   onSaveSections,
+  onSaveCurrentVersion,
+  onLoadVersions,
+  onPreviewVersion,
+  onRestoreVersion,
   onExport,
 }: DocumentViewProps) {
   const [mode, setMode] = useState<"view" | "edit">("view")
@@ -125,6 +134,14 @@ export function DocumentView({
   const [customOpen, setCustomOpen] = useState(false)
   const [customTopic, setCustomTopic] = useState("")
   const [customLoading, setCustomLoading] = useState(false)
+  const [savingVersion, setSavingVersion] = useState(false)
+  const [versionsOpen, setVersionsOpen] = useState(false)
+  const [versionsLoading, setVersionsLoading] = useState(false)
+  const [versions, setVersions] = useState<SectionVersionMeta[]>([])
+  const [selectedVersionId, setSelectedVersionId] = useState<string | null>(null)
+  const [previewLoading, setPreviewLoading] = useState(false)
+  const [previewSections, setPreviewSections] = useState<TZSection[]>([])
+  const [restoringVersion, setRestoringVersion] = useState(false)
 
   const validation = content?.validation
   const validationGaps = validation?.gaps ?? []
@@ -140,10 +157,13 @@ export function DocumentView({
       return
     }
 
-    if (!normalized.some(section => section.section_id === selectedSectionId)) {
-      setSelectedSectionId(normalized[0].section_id)
-    }
-  }, [content, selectedSectionId])
+    setSelectedSectionId(prev => {
+      if (normalized.some(section => section.section_id === prev)) {
+        return prev
+      }
+      return normalized[0].section_id
+    })
+  }, [content])
 
   const selectedIndex = useMemo(
     () => draftSections.findIndex(section => section.section_id === selectedSectionId),
@@ -219,6 +239,67 @@ export function DocumentView({
     }
   }, [draftSections, onSaveSections])
 
+  const handleSaveVersion = useCallback(async () => {
+    setSavingVersion(true)
+    try {
+      await onSaveCurrentVersion()
+    } finally {
+      setSavingVersion(false)
+    }
+  }, [onSaveCurrentVersion])
+
+  const handleOpenVersions = useCallback(async () => {
+    setVersionsOpen(true)
+    setVersionsLoading(true)
+    try {
+      const loaded = await onLoadVersions()
+      setVersions(loaded)
+      if (loaded.length > 0) {
+        const firstId = loaded[0].id
+        setSelectedVersionId(firstId)
+        setPreviewLoading(true)
+        try {
+          const preview = await onPreviewVersion(firstId)
+          setPreviewSections(preview)
+        } finally {
+          setPreviewLoading(false)
+        }
+      } else {
+        setSelectedVersionId(null)
+        setPreviewSections([])
+      }
+    } finally {
+      setVersionsLoading(false)
+    }
+  }, [onLoadVersions, onPreviewVersion])
+
+  const handleSelectVersion = useCallback(async (versionId: string) => {
+    setSelectedVersionId(versionId)
+    setPreviewLoading(true)
+    try {
+      const preview = await onPreviewVersion(versionId)
+      setPreviewSections(preview)
+    } finally {
+      setPreviewLoading(false)
+    }
+  }, [onPreviewVersion])
+
+  const handleRestoreSelectedVersion = useCallback(async () => {
+    if (!selectedVersionId) return
+    if (dirty) {
+      const confirmed = window.confirm("Все текущие несохраненные изменения будут сброшены. Продолжить восстановление?")
+      if (!confirmed) return
+    }
+
+    setRestoringVersion(true)
+    try {
+      await onRestoreVersion(selectedVersionId)
+      setVersionsOpen(false)
+    } finally {
+      setRestoringVersion(false)
+    }
+  }, [dirty, onRestoreVersion, selectedVersionId])
+
   const handleRegenerate = useCallback(() => {
     if (!selectedSection) return
     setRegenLoading(true)
@@ -250,10 +331,29 @@ export function DocumentView({
   }
 
   return (
-    <div className="flex h-full flex-col">
+    <div className="relative flex h-full flex-col">
       <div className="flex shrink-0 items-center justify-between gap-2 border-b px-4 py-2.5">
         <span className="text-xs text-muted-foreground">Рабочая версия документа</span>
         <div className="flex items-center gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-7 gap-1.5 text-xs"
+            onClick={handleSaveVersion}
+            disabled={savingVersion}
+          >
+            {savingVersion ? <Loader2 className="size-3.5 animate-spin" /> : "Сохранить текущую версию"}
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-7 gap-1.5 text-xs"
+            onClick={() => {
+              void handleOpenVersions()
+            }}
+          >
+            Прошлые версии
+          </Button>
           {mode === "edit" && dirty && (
             <Button size="sm" className="h-7 gap-1.5 text-xs" onClick={handleSaveAll} disabled={savingAll}>
               {savingAll ? <Loader2 className="size-3.5 animate-spin" /> : "Сохранить все изменения"}
@@ -460,6 +560,79 @@ export function DocumentView({
               ) : (
                 <div className="flex h-full items-center justify-center text-sm text-muted-foreground">Нет выбранной секции</div>
               )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {versionsOpen && (
+        <div className="absolute inset-0 z-20 flex items-center justify-center bg-background/60 p-6">
+          <div className="flex h-[70vh] w-full max-w-5xl gap-4 rounded-xl border bg-background p-4 shadow-xl">
+            <div className="flex w-[280px] shrink-0 flex-col rounded-lg border">
+              <div className="border-b px-3 py-2 text-sm font-medium">Прошлые версии</div>
+              <div className="chat-scrollbar flex-1 space-y-1 overflow-y-auto p-2">
+                {versionsLoading ? (
+                  <div className="flex items-center justify-center py-10 text-muted-foreground"><Loader2 className="size-4 animate-spin" /></div>
+                ) : versions.length === 0 ? (
+                  <div className="px-2 py-6 text-xs text-muted-foreground">Сохраненных версий пока нет</div>
+                ) : (
+                  versions.map(version => (
+                    <button
+                      key={version.id}
+                      onClick={() => {
+                        void handleSelectVersion(version.id)
+                      }}
+                      className={cn(
+                        "w-full rounded-md border px-2 py-2 text-left text-xs hover:bg-accent/50",
+                        selectedVersionId === version.id && "bg-accent",
+                      )}
+                    >
+                      <div className="font-medium">{version.title}</div>
+                      <div className="text-muted-foreground">{new Date(version.created_at).toLocaleString()}</div>
+                      <div className="text-muted-foreground">{version.sections_count} секций</div>
+                    </button>
+                  ))
+                )}
+              </div>
+            </div>
+
+            <div className="flex min-w-0 flex-1 flex-col rounded-lg border">
+              <div className="border-b px-3 py-2 text-sm font-medium">Предпросмотр</div>
+              <div className="chat-scrollbar flex-1 overflow-y-auto p-3">
+                {previewLoading ? (
+                  <div className="flex items-center justify-center py-10 text-muted-foreground"><Loader2 className="size-4 animate-spin" /></div>
+                ) : previewSections.length === 0 ? (
+                  <div className="py-8 text-center text-sm text-muted-foreground">Выберите версию для просмотра</div>
+                ) : (
+                  <div className="space-y-3">
+                    {previewSections.map((section, idx) => (
+                      <div key={`${section.section_id}-${idx}`} className="rounded-md border p-3">
+                        <div className="mb-1 text-sm font-medium">{idx + 1}. {section.title}</div>
+                        <div className="line-clamp-4 whitespace-pre-wrap text-xs text-muted-foreground">{section.content_md || "Пусто"}</div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              <div className="flex items-center justify-between border-t px-3 py-2">
+                <p className="text-xs text-amber-600">При восстановлении несохраненные изменения будут потеряны.</p>
+                <div className="flex items-center gap-2">
+                  <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => setVersionsOpen(false)}>
+                    Закрыть
+                  </Button>
+                  <Button
+                    size="sm"
+                    className="h-7 text-xs"
+                    disabled={!selectedVersionId || restoringVersion}
+                    onClick={() => {
+                      void handleRestoreSelectedVersion()
+                    }}
+                  >
+                    {restoringVersion ? <Loader2 className="size-3.5 animate-spin" /> : "Восстановить версию"}
+                  </Button>
+                </div>
+              </div>
             </div>
           </div>
         </div>

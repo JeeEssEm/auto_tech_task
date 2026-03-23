@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 import { fileApi } from "@/shared/api/file-service"
 import { tzApi } from "@/shared/api/tz-service"
-import type { PendingItemsResponse } from "@/shared/api/tz-service"
+import type { PendingItemsResponse, SectionVersionMeta } from "@/shared/api/tz-service"
 import type { WsEventMap } from "@/shared/ws/types"
 import { useChatSocket } from "@/shared/ws/use-chat-socket"
 
@@ -264,6 +264,31 @@ export function ChatPage() {
     [id, workspace.refreshContent],
   )
 
+  const handleSaveCurrentVersion = useCallback(async () => {
+    if (!id) return
+    await tzApi.saveSectionsVersion(id)
+    toast.success("Версия сохранена")
+  }, [id])
+
+  const handleLoadVersions = useCallback(async (): Promise<SectionVersionMeta[]> => {
+    if (!id) return []
+    const data = await tzApi.getSectionsVersions(id)
+    return data.versions
+  }, [id])
+
+  const handlePreviewVersion = useCallback(async (versionId: string): Promise<TZSection[]> => {
+    if (!id) return []
+    const data = await tzApi.previewSectionsVersion(id, versionId)
+    return data.sections as TZSection[]
+  }, [id])
+
+  const handleRestoreVersion = useCallback(async (versionId: string) => {
+    if (!id) return
+    await tzApi.restoreSectionsVersion(id, versionId)
+    toast.success("Версия восстановлена")
+    await workspace.refreshContent()
+  }, [id, workspace.refreshContent])
+
   const handleFileClick = async (fileId: string, fileName: string) => {
     try {
       await fileApi.downloadFile(fileId, fileName)
@@ -340,6 +365,10 @@ export function ChatPage() {
               onGenerateCustomBlock={handleGenerateCustomBlock}
               onExport={handleExport}
               onSaveSections={handleSaveSections}
+              onSaveCurrentVersion={handleSaveCurrentVersion}
+              onLoadVersions={handleLoadVersions}
+              onPreviewVersion={handlePreviewVersion}
+              onRestoreVersion={handleRestoreVersion}
             />
           )}
           {workspace.activeTab === "files" && (

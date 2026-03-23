@@ -1,4 +1,5 @@
 ﻿import json
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
@@ -259,6 +260,28 @@ def _validate_sections(sections: list[DocumentSectionPayload]) -> None:
             raise HTTPException(status_code=400, detail="Section title cannot be empty")
 
 
+def _load_versions_from_state(run_state_json: str | None) -> list[dict]:
+    if not run_state_json:
+        return []
+    try:
+        state = json.loads(run_state_json)
+    except json.JSONDecodeError:
+        return []
+
+    internal = state.get("internal_state", {})
+    versions = internal.get("section_versions", [])
+    if not isinstance(versions, list):
+        return []
+    return [item for item in versions if isinstance(item, dict)]
+
+
+def _find_version_meta(versions: list[dict], version_id: str) -> dict | None:
+    for item in versions:
+        if str(item.get("id")) == version_id:
+            return item
+    return None
+
+
 @router.post("/{chat_id}/update-sections")
 async def update_sections(
     chat_id: int,
@@ -277,6 +300,147 @@ async def update_sections(
         [section.model_dump() for section in body.sections],
     )
 
+    return {"status": "ok"}
+
+
+@router.post("/{chat_id}/sections/versions")
+async def save_sections_version(
+    chat_id: int,
+    user: FromDishka[AuthenticatedUser],
+    chat_repo: FromDishka[ChatRepository],
+    gen_repo: FromDishka[GenerationRepository],
+    gkg_repo: FromDishka[GKGRepository],
+    storage: FromDishka[StorageWorker],
+    config: FromDishka[AppSettings],
+) -> dict[str, str]:
+    """Сохраняет копию текущих секций в S3 и добавляет метаинформацию в state run."""
+    await _ensure_user_owns_chat(chat_repo, user.id, chat_id)
+
+    run = await gen_repo.get_latest_run(chat_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="No generation found")
+
+    payload = await gkg_repo.build_tz_result_payload(chat_id)
+    sections = payload.get("sections", [])
+    created_at = datetime.now(UTC).isoformat()
+    version_id = datetime.now(UTC).strftime("%Y%m%d%H%M%S%f")
+    key = f"section-versions/{chat_id}/{version_id}.json"
+
+    body = json.dumps(
+        {
+            "chat_id": chat_id,
+            "created_at": created_at,
+            "sections": sections,
+        },
+        ensure_ascii=False,
+    ).encode("utf-8")
+
+    await storage.put_object(
+        bucket=config.storage.BUCKET_NAME,
+        key=key,
+        data=body,
+        content_type="application/json",
+    )
+
+    state = json.loads(run.state_json) if run.state_json else {}
+    internal = state.get("internal_state", {})
+    versions = _load_versions_from_state(run.state_json)
+    versions.append(
+        {
+            "id": version_id,
+            "key": key,
+            "created_at": created_at,
+            "sections_count": len(sections),
+            "title": f"Версия {len(versions) + 1}",
+        }
+    )
+    internal["section_versions"] = versions[-50:]
+    state["internal_state"] = internal
+    await gen_repo.save_state(run.id, json.dumps(state, ensure_ascii=False))
+
+    return {"status": "ok", "version_id": version_id, "created_at": created_at}
+
+
+@router.get("/{chat_id}/sections/versions")
+async def list_sections_versions(
+    chat_id: int,
+    user: FromDishka[AuthenticatedUser],
+    chat_repo: FromDishka[ChatRepository],
+    gen_repo: FromDishka[GenerationRepository],
+) -> dict[str, list[dict]]:
+    """Возвращает список сохраненных версий секций."""
+    await _ensure_user_owns_chat(chat_repo, user.id, chat_id)
+
+    run = await gen_repo.get_latest_run(chat_id)
+    if run is None:
+        return {"versions": []}
+
+    versions = _load_versions_from_state(run.state_json)
+    versions.sort(key=lambda item: str(item.get("created_at", "")), reverse=True)
+    return {"versions": versions}
+
+
+@router.get("/{chat_id}/sections/versions/{version_id}")
+async def preview_sections_version(
+    chat_id: int,
+    version_id: str,
+    user: FromDishka[AuthenticatedUser],
+    chat_repo: FromDishka[ChatRepository],
+    gen_repo: FromDishka[GenerationRepository],
+    storage: FromDishka[StorageWorker],
+    config: FromDishka[AppSettings],
+) -> dict:
+    """Возвращает предпросмотр секций для выбранной версии."""
+    await _ensure_user_owns_chat(chat_repo, user.id, chat_id)
+
+    run = await gen_repo.get_latest_run(chat_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="No generation found")
+
+    versions = _load_versions_from_state(run.state_json)
+    meta = _find_version_meta(versions, version_id)
+    if meta is None:
+        raise HTTPException(status_code=404, detail="Version not found")
+
+    payload_text = await storage.get_text(config.storage.BUCKET_NAME, str(meta["key"]))
+    payload = json.loads(payload_text)
+    sections = payload.get("sections", [])
+    if not isinstance(sections, list):
+        sections = []
+
+    return {"version": meta, "sections": sections}
+
+
+@router.post("/{chat_id}/sections/versions/{version_id}/restore")
+async def restore_sections_version(
+    chat_id: int,
+    version_id: str,
+    user: FromDishka[AuthenticatedUser],
+    chat_repo: FromDishka[ChatRepository],
+    gen_repo: FromDishka[GenerationRepository],
+    gkg_repo: FromDishka[GKGRepository],
+    storage: FromDishka[StorageWorker],
+    config: FromDishka[AppSettings],
+) -> dict[str, str]:
+    """Восстанавливает секции из сохраненной версии в S3."""
+    await _ensure_user_owns_chat(chat_repo, user.id, chat_id)
+
+    run = await gen_repo.get_latest_run(chat_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="No generation found")
+
+    versions = _load_versions_from_state(run.state_json)
+    meta = _find_version_meta(versions, version_id)
+    if meta is None:
+        raise HTTPException(status_code=404, detail="Version not found")
+
+    payload_text = await storage.get_text(config.storage.BUCKET_NAME, str(meta["key"]))
+    payload = json.loads(payload_text)
+    sections = payload.get("sections", [])
+    if not isinstance(sections, list) or not sections:
+        raise HTTPException(status_code=400, detail="Version has no sections")
+
+    await gkg_repo.replace_document_sections(chat_id, sections)
     return {"status": "ok"}
 
 
