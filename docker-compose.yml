@@ -4,19 +4,25 @@
 
 services:
   db:
-      image: pgvector/pgvector:pg17
-      restart: unless-stopped
-      env_file: .env
-      environment:
-          POSTGRES_USER: ${POSTGRES_USER}
-          POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-          POSTGRES_DB: ${POSTGRES_DB}
-      volumes:
-        - postgres-data:/var/lib/postgresql/data/
-      networks:
-        - app_network
-      ports:
-        - "5435:5432"
+    image: pgvector/pgvector:pg17
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data/
+      - ./backend/app/infrastructure/persistent/prisma/init_pgvector.sql:/docker-entrypoint-initdb.d/init_pgvector.sql:ro
+    networks:
+      - app_network
+    ports:
+      - "5435:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
 
   redis:
     image: redis:8-alpine
@@ -29,6 +35,11 @@ services:
       - "6379:6379"
     networks:
       - app_network
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "PING"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
 
   rabbitmq:
     image: rabbitmq:3-management-alpine
@@ -43,6 +54,11 @@ services:
       - rabbitmq:/var/lib/rabbitmq
     networks:
       - app_network
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "check_running"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
 
   seaweedfs:
     image: chrislusf/seaweedfs:latest
@@ -59,8 +75,98 @@ services:
     networks:
       - app_network
 
+  backend:
+    image: ghcr.io/astral-sh/uv:python3.12-bookworm
+    working_dir: /app
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+      REDIS_HOST: redis
+      RABBITMQ_HOST: rabbitmq
+      STORAGE_HOST: seaweedfs
+      STORAGE_PORT: 8333
+      UVICORN_HOST: 0.0.0.0
+      UVICORN_PORT: 8000
+      LLM_PIPELINE_V3_DEPS_MODE: postgres
+      PYTHONUNBUFFERED: "1"
+    volumes:
+      - ./:/app
+    command: >
+      bash -lc "
+      uv sync --frozen &&
+      uv run prisma generate --schema backend/app/infrastructure/persistent/prisma/schema.prisma &&
+      uv run python -m backend.app.main
+      "
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      seaweedfs:
+        condition: service_started
+    networks:
+      - app_network
+
+  worker:
+    image: ghcr.io/astral-sh/uv:python3.12-bookworm
+    working_dir: /app
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+      REDIS_HOST: redis
+      RABBITMQ_HOST: rabbitmq
+      STORAGE_HOST: seaweedfs
+      STORAGE_PORT: 8333
+      LLM_PIPELINE_V3_DEPS_MODE: postgres
+      PYTHONUNBUFFERED: "1"
+    volumes:
+      - ./:/app
+    command: >
+      bash -lc "
+      uv sync --frozen &&
+      uv run prisma generate --schema backend/app/infrastructure/persistent/prisma/schema.prisma &&
+      uv run taskiq worker backend.worker.main:broker --fs-startup
+      "
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      seaweedfs:
+        condition: service_started
+    networks:
+      - app_network
+
+  frontend:
+    image: node:22-alpine
+    working_dir: /app/frontend
+    restart: unless-stopped
+    environment:
+      VITE_API_URL: http://localhost:8000
+      VITE_BACKEND_URL: http://localhost:8000/api/v1
+      CHOKIDAR_USEPOLLING: "true"
+    volumes:
+      - ./:/app
+      - frontend-node-modules:/app/frontend/node_modules
+    command: sh -lc "npm install && npm run dev -- --host 0.0.0.0 --port 5173"
+    ports:
+      - "5173:5173"
+    depends_on:
+      - backend
+    networks:
+      - app_network
+
 volumes:
   postgres-data:
   redis-data:
   rabbitmq:
   seaweedfs:
+  frontend-node-modules:

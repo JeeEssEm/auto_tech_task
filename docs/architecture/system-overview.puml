@@ -1,0 +1,68 @@
+@startuml system-overview
+skinparam dpi 170
+skinparam shadowing false
+skinparam linetype ortho
+skinparam packageStyle rectangle
+skinparam ArrowThickness 1
+skinparam ArrowColor #2F3E46
+skinparam defaultTextAlignment center
+skinparam nodesep 55
+skinparam ranksep 70
+
+skinparam rectangle {
+  BorderColor #1B263B
+  BackgroundColor #F8F9FA
+  FontColor #1B263B
+}
+
+title Auto-TZ System Overview
+
+rectangle "User Browser" as user #EAF4FF
+rectangle "Frontend\nReact + Vite + Tiptap\n(port 5173)" as fe #EAF4FF
+rectangle "Backend API\nFastAPI + Dishka + Prisma\n(port 8000)" as api #E6FCF5
+rectangle "Worker\nTaskIQ + LLM Pipeline + Parser + Export" as worker #FFF4E6
+
+rectangle "RabbitMQ\nTask queue broker" as rabbit #FFF0F6
+rectangle "Redis\nPub/Sub + TaskIQ result backend" as redis #F3F0FF
+rectangle "PostgreSQL + pgvector\napplication + GKG data" as pg #EEF2FF
+rectangle "SeaweedFS (S3)\nattachments / transcripts / exports" as s3 #EEF2FF
+rectangle "LLM Providers\nOpenRouter / Ollama" as llm #FFF9DB
+
+user --> fe : HTTP
+fe --> api : REST API
+fe <--> api : WebSocket /chat/ws
+
+api --> rabbit : enqueue tasks
+rabbit --> worker : deliver tasks
+
+worker --> redis : publish events
+api --> redis : subscribe for WS forwarding
+api --> pg : ORM (Prisma)
+worker --> pg : ORM + raw SQL (pgvector)
+
+api --> s3 : upload/download attachments
+worker --> s3 : parsed text + export files
+
+worker --> llm : router/harvester/judge\nconsultant/architect calls
+
+note bottom of fe
+Frontend consumes events:
+- PARSING_STATUS
+- GENERATION_STATUS
+- LLM_ANSWER
+- EXPORT_READY
+- ERROR
+end note
+
+note right of worker
+Long-running operations:
+- parse_file_task
+- process_message_task
+- create_tz_from_template_task
+- update_tz_with_sources_task
+- regenerate_block_task
+- resolve_conflict_task
+- export_tz_task
+end note
+
+@enduml

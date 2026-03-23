@@ -1,0 +1,75 @@
+@startuml llm-pipeline
+skinparam dpi 170
+skinparam shadowing false
+skinparam linetype ortho
+skinparam packageStyle rectangle
+skinparam ArrowThickness 1
+skinparam ArrowColor #2F3E46
+skinparam defaultTextAlignment center
+skinparam nodesep 55
+skinparam ranksep 65
+
+skinparam rectangle {
+  BorderColor #1B263B
+  BackgroundColor #F8F9FA
+  FontColor #1B263B
+}
+
+title Auto-TZ LLM Pipeline v3 (Behavior-level)
+
+rectangle "TaskIQ Entry\nprocess_message_task / create_tz_from_template_task / update_tz_with_sources_task" as entry
+rectangle "Orchestrator.run()\nbuild initial state\n(gkg/doc/pending snapshots)" as orch
+rectangle "route_node\nIntentRouter" as router #E8F3FF
+
+rectangle "guardian_node\nGuardian behavior\n(Agent: yes)" as guardian #FFF4E6
+rectangle "consultant_node\nConsultant behavior\n(Agent: yes)" as consultant #E6FCF5
+rectangle "harvester_node\nHarvester behavior\n(Agent: yes)" as harvester #E6F4EA
+rectangle "grouping_judge_node\nGroupingJudge behavior\n(Agent: yes)" as judge #FFF0F6
+rectangle "persist_gkg_node\nPersist GKG + pending conflicts\n(Agent: no)" as persist #F1F3F5
+rectangle "architect_node\nArchitect behavior\n(Agent: yes)" as architect #FFF9DB
+rectangle "compose_node\nCompose final chat parts\n(Agent: no)" as compose #F1F3F5
+
+rectangle "DB via GKGRepository\n- LlmGkgFact\n- LlmPendingConflict\n- LlmPendingAction\n- LlmDocumentSection\n- LlmRawSourceChunk" as db #EEF2FF
+rectangle "Redis Pub/Sub\nGENERATION_STATUS / LLM_ANSWER / ERROR" as redis #F3F0FF
+
+entry --> orch
+orch --> router
+
+router --> guardian : role=Guardian
+router --> consultant : role=Consultant
+router --> harvester : role=Harvester\nor attachments exist
+router --> architect : role=Architect\n(no harvester branch)
+router --> compose : no behaviors
+
+harvester --> judge
+judge --> persist
+persist --> architect : trigger_reason=spec_block_affected
+
+guardian --> compose
+consultant --> compose
+architect --> compose
+
+persist --> db
+architect --> db : save_document_updates()
+harvester --> db : capture_raw_source()
+
+compose --> redis
+
+note right of router
+Determines behavior fan-out using:
+- user_input
+- attachments metadata
+- gkg_snapshot
+- doc_snapshot
+- pending_actions
+end note
+
+note right of architect
+Architect campaign flow:
+1) plan sections
+2) per-section tool calls
+3) update content_md / pending actions
+4) skip is_manual sections
+end note
+
+@enduml
