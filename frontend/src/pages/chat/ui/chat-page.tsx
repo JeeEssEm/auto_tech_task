@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 import { fileApi } from "@/shared/api/file-service"
 import { tzApi } from "@/shared/api/tz-service"
+import type { PendingItemsResponse } from "@/shared/api/tz-service"
 import type { WsEventMap } from "@/shared/ws/types"
 import { useChatSocket } from "@/shared/ws/use-chat-socket"
 
@@ -32,11 +33,14 @@ export function ChatPage() {
   const { id } = useParams()
   const [inputValue, setInputValue] = useState("")
   const [chatOpen, setChatOpen] = useState(true)
+  const [pendingItems, setPendingItems] = useState<PendingItemsResponse | null>(null)
+  const [pendingItemsLoading, setPendingItemsLoading] = useState(false)
+  const [selectedActionId, setSelectedActionId] = useState<string | null>(null)
   const pipelineTriggered = useRef(false)
 
   // Chat data
   const { messages, setMessages, isLoading, handleLlmAnswer } = useChatMessages(id)
-  const { steps, isThinking, handleGenerationStatus, completeGeneration } = useGenerationStatus()
+  const { steps, isThinking, handleGenerationStatus, completeGeneration, failGeneration, resetGeneration } = useGenerationStatus()
 
   // Workspace data (document, files, graph)
   const workspace = useWorkspaceData(id)
@@ -44,12 +48,17 @@ export function ChatPage() {
   // Wrap LLM_ANSWER to also complete generation thinking + refresh TZ
   const handleLlmAnswerWithComplete = useCallback(
     (data: WsEventMap["LLM_ANSWER"]) => {
-      completeGeneration()
       handleLlmAnswer(data)
-      // After a short delay, refresh generations to pick up the new TZ
-      setTimeout(() => workspace.refreshGenerations(), 2000)
+      if (data.is_final !== false) {
+        completeGeneration()
+        // After a short delay, refresh generations to pick up the new TZ
+        setTimeout(() => {
+          workspace.refreshGenerations()
+          workspace.refreshGraph()
+        }, 2000)
+      }
     },
-    [completeGeneration, handleLlmAnswer, workspace.refreshGenerations],
+    [completeGeneration, handleLlmAnswer, workspace.refreshGenerations, workspace.refreshGraph],
   )
 
   const handleParsingFailed = useCallback((_attachmentId: string, fileName: string) => {
@@ -69,6 +78,19 @@ export function ChatPage() {
     workspace.refreshAttachments()
   }, [workspace.refreshAttachments])
 
+  const refreshPendingItems = useCallback(async () => {
+    if (!id) return
+    setPendingItemsLoading(true)
+    try {
+      const data = await tzApi.getPendingItems(id)
+      setPendingItems(data)
+    } catch {
+      setPendingItems({ conflicts: [], actions: [] })
+    } finally {
+      setPendingItemsLoading(false)
+    }
+  }, [id])
+
   const { statusMap, registerName, trackAttachments, handleParsingStatus } = useParsingStatus({
     onFailed: handleParsingFailed,
     onFailedCleanup: handleParsingFailedCleanup,
@@ -84,6 +106,11 @@ export function ChatPage() {
     setInputValue,
     clearFiles,
     onAttachmentsSent: trackAttachments,
+    resolveActionId: selectedActionId,
+    onActionResolved: async () => {
+      setSelectedActionId(null)
+      await refreshPendingItems()
+    },
   })
 
   // --- Auto-trigger full pipeline when parsed files are available but no generation exists ---
@@ -94,31 +121,60 @@ export function ChatPage() {
     if (workspace.attachments.length === 0) return
     if (workspace.isLoading) return
 
-    pipelineTriggered.current = true
-    const attachmentIds = workspace.attachments.map(a => a.key)
+    let cancelled = false
 
-    tzApi
-      .runFullPipeline(id, attachmentIds)
-      .then(() => toast.info("Генерация ТЗ запущена"))
-      .catch(err => {
-        pipelineTriggered.current = false
-        const msg = err instanceof Error ? err.message : "Не удалось запустить генерацию"
-        toast.error(msg)
-      })
+    const maybeStartPipeline = async () => {
+      try {
+        const status = await tzApi.getGenerationStatus(id)
+        if (cancelled || pipelineTriggered.current) return
+
+        // If any run already exists (PENDING/IN_PROCESS/SUCCESS/FAILED), do not auto-trigger again.
+        if (status.status !== null) {
+          pipelineTriggered.current = true
+          return
+        }
+
+        pipelineTriggered.current = true
+        const attachmentIds = workspace.attachments.map(a => a.key)
+        await tzApi.runFullPipeline(id, attachmentIds)
+        if (!cancelled) {
+          toast.info("Генерация ТЗ запущена")
+        }
+      } catch (err) {
+        if (!cancelled) {
+          pipelineTriggered.current = false
+          const msg = err instanceof Error ? err.message : "Не удалось запустить генерацию"
+          toast.error(msg)
+        }
+      }
+    }
+
+    maybeStartPipeline()
+
+    return () => {
+      cancelled = true
+    }
   }, [id, workspace.generations.length, workspace.attachments.length, workspace.isLoading])
 
   // Reset trigger flag when chat changes
   useEffect(() => {
     pipelineTriggered.current = false
-  }, [id])
+    resetGeneration()
+  }, [id, resetGeneration])
 
   // --- EXPORT_READY handler ---
   const handleExportReady = useCallback((data: WsEventMap["EXPORT_READY"]) => {
+    const targetChatId = String(data.chat_id)
+
+    tzApi.downloadExport(targetChatId, data.export_key).catch(() => {
+      toast.error("Ошибка скачивания файла")
+    })
+
     toast.success("Экспорт готов!", {
       action: {
         label: "Скачать",
         onClick: () => {
-          tzApi.downloadExport(String(data.chat_id), data.export_key).catch(() => {
+          tzApi.downloadExport(targetChatId, data.export_key).catch(() => {
             toast.error("Ошибка скачивания файла")
           })
         },
@@ -127,12 +183,41 @@ export function ChatPage() {
     })
   }, [])
 
+  const handlePipelineError = useCallback((data: WsEventMap["ERROR"]) => {
+    const message = typeof data.message === "string" && data.message.length > 0
+      ? data.message
+      : "Ошибка пайплайна генерации"
+    failGeneration(message)
+    toast.error(message)
+  }, [failGeneration])
+
+  const handleGenerationStatusWithRefresh = useCallback((data: WsEventMap["GENERATION_STATUS"]) => {
+    handleGenerationStatus(data)
+    const status = String(data.status || "").toUpperCase()
+    if (status.includes("COMPLETED") || status.includes("FAILED")) {
+      refreshPendingItems()
+      workspace.refreshGraph()
+    }
+  }, [handleGenerationStatus, refreshPendingItems, workspace.refreshGraph])
+
   useChatSocket(id, {
     LLM_ANSWER: handleLlmAnswerWithComplete,
     PARSING_STATUS: handleParsingStatus,
-    GENERATION_STATUS: handleGenerationStatus,
+    GENERATION_STATUS: handleGenerationStatusWithRefresh,
     EXPORT_READY: handleExportReady,
+    ERROR: handlePipelineError,
   })
+
+  useEffect(() => {
+    refreshPendingItems()
+  }, [refreshPendingItems])
+
+  useEffect(() => {
+    if (!selectedActionId || !pendingItems) return
+    if (!pendingItems.actions.some(a => a.id === selectedActionId)) {
+      setSelectedActionId(null)
+    }
+  }, [selectedActionId, pendingItems])
 
   // --- Document-level callbacks ---
   const handleRegenerateBlock = useCallback(
@@ -229,12 +314,6 @@ export function ChatPage() {
         </div>
 
         <div className="flex items-center gap-3">
-          {/* Generation count */}
-          {workspace.generations.length > 0 && (
-            <span className="text-xs text-muted-foreground hidden sm:inline">
-              {workspace.generations.length} верс. ТЗ
-            </span>
-          )}
           {/* Files count */}
           {workspace.attachments.length > 0 && (
             <span className="text-xs text-muted-foreground hidden sm:inline">
@@ -262,10 +341,7 @@ export function ChatPage() {
         <div className="flex-1 min-w-0">
           {workspace.activeTab === "document" && (
             <DocumentView
-              chatId={id}
-              generations={workspace.generations}
               selected={workspace.selectedGeneration}
-              onSelect={workspace.setSelectedGeneration}
               content={workspace.generationContent}
               isContentLoading={workspace.isContentLoading}
               onRegenerateBlock={handleRegenerateBlock}
@@ -283,7 +359,7 @@ export function ChatPage() {
             />
           )}
           {workspace.activeTab === "graph" && (
-            <KnowledgeGraphTab graph={workspace.graph} />
+            <KnowledgeGraphTab graph={workspace.graph} facts={workspace.graphFacts} focusedFactId={workspace.focusedFactId} />
           )}
         </div>
 
@@ -308,6 +384,11 @@ export function ChatPage() {
               onRemoveFile={removeFile}
               onFileClick={handleFileClick}
               onClose={() => setChatOpen(false)}
+              pendingItems={pendingItems}
+              isPendingItemsLoading={pendingItemsLoading}
+              selectedActionId={selectedActionId}
+              onSelectAction={setSelectedActionId}
+              onClearSelectedAction={() => setSelectedActionId(null)}
             />
           </div>
         )}

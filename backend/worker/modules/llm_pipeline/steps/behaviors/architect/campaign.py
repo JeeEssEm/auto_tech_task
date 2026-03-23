@@ -1,7 +1,6 @@
-from dataclasses import dataclass, field
 from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from backend.worker.modules.llm_pipeline.steps.behaviors.architect.schemas import ArchitectResponse
 
@@ -33,4 +32,4 @@ class ArchitectCampaign(BaseModel):
         "explicit_regen_request",
     ]
     document: list[SectionState]
-    forced_sections: list[str] = field(default_factory=list)
+    forced_sections: list[str] = Field(default_factory=list)

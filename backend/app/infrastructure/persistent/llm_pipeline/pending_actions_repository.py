@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 
-from prisma import Prisma
+from prisma import Prisma, Json
 
 
 class PendingActionsRepository:
@@ -19,7 +20,7 @@ class PendingActionsRepository:
             data={
                 "project_id": project_id,
                 "question": question,
-                "options_json": options,
+                "options_json": Json(options),
                 "status": "WAITING",
             }
         )

@@ -1,5 +1,5 @@
-﻿import { useCallback, useEffect, useState } from "react"
-import { useEditor, EditorContent } from "@tiptap/react"
+﻿import { useCallback, useEffect, useRef, useState } from "react"
+import { useEditor, useEditorState, EditorContent } from "@tiptap/react"
 import StarterKit from "@tiptap/starter-kit"
 import Placeholder from "@tiptap/extension-placeholder"
 import Underline from "@tiptap/extension-underline"
@@ -14,7 +14,6 @@ import {
   Bold,
   Italic,
   Underline as UnderlineIcon,
-  Strikethrough,
   Highlighter,
   List,
   ListOrdered,
@@ -40,6 +39,7 @@ type RichTextEditorProps = {
   className?: string
   editable?: boolean
   minHeight?: string
+  onLinkClick?: (href: string) => void
 }
 
 export function RichTextEditor({
@@ -49,7 +49,10 @@ export function RichTextEditor({
   className,
   editable = true,
   minHeight = "120px",
+  onLinkClick,
 }: RichTextEditorProps) {
+  const prevValueRef = useRef<string>(value)
+
   const editor = useEditor({
     extensions: [
       StarterKit.configure({
@@ -59,7 +62,7 @@ export function RichTextEditor({
       Underline,
       Highlight.configure({ multicolor: false }),
       Link.configure({
-        openOnClick: false,
+        openOnClick: !editable,
         HTMLAttributes: { rel: "noopener noreferrer", target: "_blank" },
       }),
       Table.configure({ resizable: false }),
@@ -81,15 +84,44 @@ export function RichTextEditor({
     },
   })
 
+  useEffect(() => {
+    if (!editor) return
+    editor.setEditable(editable)
+  }, [editable, editor])
+
   // Sync external value changes
   useEffect(() => {
     if (!editor) return
+    if (value === prevValueRef.current) return
+
+    prevValueRef.current = value
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const current = (editor.storage as Record<string, any>).markdown.getMarkdown()
-    if (current !== value) {
+    if (current !== value && !editor.isFocused) {
       editor.commands.setContent(value)
     }
   }, [value, editor])
+
+  useEffect(() => {
+    if (!editor || !onLinkClick) return
+
+    const root = editor.view.dom
+    const handleClick = (event: MouseEvent) => {
+      const target = event.target as HTMLElement | null
+      if (!target) return
+
+      const anchor = target.closest("a") as HTMLAnchorElement | null
+      const href = anchor?.getAttribute("href")
+      if (!anchor || !href) return
+
+      event.preventDefault()
+      event.stopPropagation()
+      onLinkClick(href)
+    }
+
+    root.addEventListener("click", handleClick)
+    return () => root.removeEventListener("click", handleClick)
+  }, [editor, onLinkClick])
 
   const [linkUrl, setLinkUrl] = useState("")
   const [showLinkInput, setShowLinkInput] = useState(false)
@@ -110,6 +142,11 @@ export function RichTextEditor({
     if (!editor) return
     editor.chain().focus().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run()
   }, [editor])
+
+  const isInTable = useEditorState({
+    editor,
+    selector: ({ editor: currentEditor }) => currentEditor.isActive("table"),
+  })
 
   if (!editor) return null
 
@@ -226,7 +263,7 @@ export function RichTextEditor({
           </ToolbarButton>
 
           {/* Table controls — visible only when cursor is inside a table */}
-          {editor.isActive("table") && (
+          {isInTable && (
             <>
               <div className="w-px h-4 bg-border mx-0.5" />
               <ToolbarButton

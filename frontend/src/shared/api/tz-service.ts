@@ -1,6 +1,56 @@
 ﻿import { apiClient } from "@/shared/api/client"
 
+export type PendingConflictView = {
+  id: string
+  scope: string
+  property: string
+  rationale: string
+  options: string[]
+}
+
+export type PendingActionView = {
+  id: string
+  question: string
+  options: string[]
+  status: string
+  created_at: string
+}
+
+export type PendingItemsResponse = {
+  conflicts: PendingConflictView[]
+  actions: PendingActionView[]
+}
+
+export type KnowledgeGraphFactDto = {
+  id: string
+  scope: string
+  property: string
+  value: string
+  status: string
+  rationale: string
+  source_ids: string[]
+  created_at: string
+  updated_at: string
+}
+
+export type KnowledgeGraphFactsResponse = {
+  facts: KnowledgeGraphFactDto[]
+}
+
 export const tzApi = {
+  /** Получение статуса последней генерации */
+  getGenerationStatus: async (chatId: string): Promise<{ status: string | null }> => {
+    return apiClient.get(`/tz/${chatId}/generation-status`)
+  },
+
+  getPendingItems: async (chatId: string): Promise<PendingItemsResponse> => {
+    return apiClient.get(`/tz/${chatId}/actions`)
+  },
+
+  getKnowledgeGraphFacts: async (chatId: string): Promise<KnowledgeGraphFactsResponse> => {
+    return apiClient.get(`/tz/${chatId}/facts`)
+  },
+
   /** Запуск полного пайплайна первичной генерации */
   runFullPipeline: async (
     chatId: string,
@@ -26,12 +76,24 @@ export const tzApi = {
   /** Перегенерация конкретного блока */
   regenerateBlock: async (
     chatId: string,
-    fieldPath: string,
+    blockId: string,
     instruction?: string | null,
   ): Promise<{ status: string }> => {
     return apiClient.post(`/tz/${chatId}/regenerate-block`, {
-      field_path: fieldPath,
+      block_id: blockId,
       instruction: instruction ?? null,
+    })
+  },
+
+  /** Разрешение conflict/pending action */
+  resolveConflict: async (
+    chatId: string,
+    actionId: string,
+    resolution: string,
+  ): Promise<{ status: string }> => {
+    return apiClient.post(`/tz/${chatId}/resolve-conflict`, {
+      action_id: actionId,
+      resolution,
     })
   },
 

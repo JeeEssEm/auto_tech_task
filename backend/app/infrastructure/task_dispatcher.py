@@ -127,6 +127,7 @@ class TaskiqDispatcher(TaskDispatcher):
 
         await resolve_conflict_task.kiq(
             project_id=chat_id,
+            user_id=user_id,
             action_id=action_id,
             resolution=resolution,
         )

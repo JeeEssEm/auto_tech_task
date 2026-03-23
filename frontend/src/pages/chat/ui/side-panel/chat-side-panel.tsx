@@ -3,7 +3,7 @@
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 import type { PanelTab } from "../../hooks/use-chat-panel"
-import type { GeneratedTechnicalTask, KnowledgeGraph, ParsedAttachment } from "../../lib/types"
+import type { GeneratedTechnicalTask, KnowledgeGraph, KnowledgeGraphFact, ParsedAttachment } from "../../lib/types"
 import { AttachmentsTab } from "./attachments-tab"
 import { GeneratedTzTab } from "./generated-tz-tab"
 import { KnowledgeGraphTab } from "./knowledge-graph-tab"
@@ -20,6 +20,7 @@ type ChatSidePanelProps = {
   selectedTask: GeneratedTechnicalTask | null
   onSelectTask: (task: GeneratedTechnicalTask) => void
   graph: KnowledgeGraph | null
+  facts: KnowledgeGraphFact[]
 }
 
 const tabs: { id: PanelTab; label: string; icon: React.ComponentType<{ className?: string }> }[] = [
@@ -40,6 +41,7 @@ export function ChatSidePanel({
   selectedTask,
   onSelectTask,
   graph,
+  facts,
 }: ChatSidePanelProps) {
   return (
     <div className="flex flex-col h-full border-l bg-background">
@@ -93,7 +95,7 @@ export function ChatSidePanel({
               />
             )}
             {activeTab === "graph" && (
-              <KnowledgeGraphTab graph={graph} />
+              <KnowledgeGraphTab graph={graph} facts={facts} />
             )}
           </>
         )}

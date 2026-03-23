@@ -209,17 +209,6 @@ async def generate_custom_block(
     return {"status": "accepted"}
 
 
-def _set_nested_field(data: dict, field_path: str, value: object) -> None:
-    """Устанавливает значение по dot-notation пути в словаре."""
-    keys = field_path.split(".")
-    obj = data
-    for key in keys[:-1]:
-        if key not in obj or not isinstance(obj[key], dict):
-            obj[key] = {}
-        obj = obj[key]
-    obj[keys[-1]] = value
-
-
 @router.post("/{chat_id}/manual-edit")
 async def manual_edit_block(
     chat_id: int,
@@ -227,30 +216,25 @@ async def manual_edit_block(
     user: FromDishka[AuthenticatedUser],
     chat_repo: FromDishka[ChatRepository],
     gen_repo: FromDishka[GenerationRepository],
-    storage: FromDishka[StorageWorker],
-    config: FromDishka[AppSettings],
+    gkg_repo: FromDishka[GKGRepository],
 ) -> dict[str, str]:
     """Ручное редактирование блока ТЗ пользователем."""
     await _ensure_user_owns_chat(chat_repo, user.id, chat_id)
 
     run = await gen_repo.get_latest_run(chat_id)
-    if not run or not run.result_key:
+    if not run:
         raise HTTPException(status_code=404, detail="No generation found")
 
-    try:
-        content_str = await storage.get_text(config.storage.BUCKET_NAME, run.result_key)
-        content = json.loads(content_str)
-    except Exception:
-        raise HTTPException(status_code=404, detail="Generation content not found")
+    block_id = await gkg_repo.resolve_section_id(chat_id, body.field_path)
+    if not block_id:
+        raise HTTPException(status_code=400, detail=f"Section for field_path '{body.field_path}' not found")
 
-    _set_nested_field(content["document"], body.field_path, body.value)
+    if isinstance(body.value, str):
+        content_md = body.value
+    else:
+        content_md = json.dumps(body.value, ensure_ascii=False)
 
-    await storage.put_object(
-        bucket=config.storage.BUCKET_NAME,
-        key=run.result_key,
-        data=json.dumps(content, ensure_ascii=False).encode("utf-8"),
-        content_type="application/json",
-    )
+    await gkg_repo.mark_block_manual(chat_id, block_id, content_md)
 
     if run.state_json:
         state = json.loads(run.state_json)
@@ -282,8 +266,6 @@ async def update_custom_sections(
     user: FromDishka[AuthenticatedUser],
     chat_repo: FromDishka[ChatRepository],
     gen_repo: FromDishka[GenerationRepository],
-    storage: FromDishka[StorageWorker],
-    config: FromDishka[AppSettings],
 ) -> dict[str, str]:
     """Сохранение пользовательских подпунктов секции ТЗ."""
     await _ensure_user_owns_chat(chat_repo, user.id, chat_id)
@@ -291,28 +273,16 @@ async def update_custom_sections(
     _validate_depth(body.sections)
 
     run = await gen_repo.get_latest_run(chat_id)
-    if not run or not run.result_key:
+    if not run:
         raise HTTPException(status_code=404, detail="No generation found")
 
-    try:
-        content_str = await storage.get_text(config.storage.BUCKET_NAME, run.result_key)
-        content = json.loads(content_str)
-    except Exception:
-        raise HTTPException(status_code=404, detail="Generation content not found")
-
-    if "custom_sections" not in content:
-        content["custom_sections"] = {}
-
-    content["custom_sections"][body.section_key] = [
-        s.model_dump() for s in body.sections
-    ]
-
-    await storage.put_object(
-        bucket=config.storage.BUCKET_NAME,
-        key=run.result_key,
-        data=json.dumps(content, ensure_ascii=False).encode("utf-8"),
-        content_type="application/json",
-    )
+    state = json.loads(run.state_json) if run.state_json else {}
+    internal = state.get("internal_state", {})
+    custom_sections = internal.get("custom_sections", {})
+    custom_sections[body.section_key] = [s.model_dump() for s in body.sections]
+    internal["custom_sections"] = custom_sections
+    state["internal_state"] = internal
+    await gen_repo.save_state(run.id, json.dumps(state, ensure_ascii=False))
 
     return {"status": "ok"}
 
@@ -411,21 +381,23 @@ async def get_generation_content(
         user: FromDishka[AuthenticatedUser],
         chat_repo: FromDishka[ChatRepository],
         gen_repo: FromDishka[GenerationRepository],
-        storage: FromDishka[StorageWorker],
-        config: FromDishka[AppSettings]
+    gkg_repo: FromDishka[GKGRepository],
 ):
     if not await chat_repo.check_user_has_chat_async(user.id, chat_id):
         raise HTTPException(status_code=404, detail="Chat not found")
 
-    if not await gen_repo.has_result_key_for_chat(chat_id, result_key):
+    run = await gen_repo.get_run_by_result_key(chat_id, result_key)
+    if run is None:
         raise HTTPException(status_code=404, detail="Generation content not found")
 
-    try:
-        content = await storage.get_text(config.storage.BUCKET_NAME, result_key)
-        return {"content": json.loads(content)}
+    payload = await gkg_repo.build_tz_result_payload(chat_id)
+    state = json.loads(run.state_json) if run.state_json else {}
+    internal = state.get("internal_state", {})
+    custom_sections = internal.get("custom_sections", {})
+    if isinstance(custom_sections, dict):
+        payload["custom_sections"] = custom_sections
 
-    except Exception:
-        raise HTTPException(status_code=404, detail="Generation content not found")
+    return {"content": payload}
 
 
 @router.get("/{chat_id}/generations")
@@ -479,3 +451,17 @@ async def get_pending_actions_and_conflicts(
         ],
         "actions": actions,
     }
+
+
+@router.get("/{chat_id}/facts")
+async def get_knowledge_graph_facts(
+        chat_id: int,
+        user: FromDishka[AuthenticatedUser],
+        chat_repo: FromDishka[ChatRepository],
+        gkg_repo: FromDishka[GKGRepository],
+):
+    if not await chat_repo.check_user_has_chat_async(user.id, chat_id):
+        raise HTTPException(status_code=404, detail="Chat not found")
+
+    facts = await gkg_repo.get_facts(chat_id)
+    return {"facts": facts}

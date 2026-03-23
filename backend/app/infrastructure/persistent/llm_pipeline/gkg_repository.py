@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from prisma import Prisma
+from prisma.models import LlmDocumentSection
 
 from backend.worker.modules.llm_pipeline.steps.behaviors.architect.abstractions.schemas import DocumentSnapshot
 from backend.worker.modules.llm_pipeline.steps.behaviors.architect.schemas import (
@@ -41,6 +42,28 @@ def _score(query: str, candidate: str) -> float:
         return 0.0
     overlap = sum((q & c).values())
     return overlap / sum(q.values())
+
+
+def _detect_ui_section_key(section_id: str, title: str, hint: str) -> str | None:
+    sid = (section_id or "").lower()
+    ttl = (title or "").lower()
+    hnt = (hint or "").lower()
+
+    if sid in {"sec_overview", "it_intro", "f_general", "fr_what", "c_object", "e_scope"}:
+        return "general"
+    if sid in {"sec_requirements", "it_func", "f_requirements"}:
+        return "functional"
+    if sid in {"sec_architecture", "it_tech", "c_materials", "e_tech"}:
+        return "technical"
+    if "accept" in sid or "прием" in ttl:
+        return "acceptance"
+    if "stage" in sid or "этап" in ttl or "timeline" in sid:
+        return "stages"
+    if "ui" in sid or "ux" in sid or "интерф" in ttl:
+        return "ui_ux"
+    if "non" in sid or "безопас" in ttl or "security" in hnt or "performance" in hnt:
+        return "non_functional"
+    return None
 
 
 def _as_source_ids(value: Any) -> list[str]:
@@ -121,10 +144,9 @@ class GKGRepository:
         if not callable(execute_raw) or not embedding:
             return
         vector = _to_pgvector_literal(embedding)
-        # NOTE: use explicit cast to pgvector type
-        await execute_raw(
-            f"UPDATE \"LlmGkgFact\" SET embedding_vector = '{vector}'::vector WHERE id = '{fact_id}'::uuid"
-        )
+
+        await self._db.execute_raw(f"UPDATE \"LlmGkgFact\" SET embedding_vector = '{vector}'::vector WHERE id = '{fact_id}'::uuid")
+
 
     async def apply_template_sections(self, project_id: int, template_type: str) -> None:
         template_id = _template_alias(template_type)
@@ -150,96 +172,75 @@ class GKGRepository:
                 }
             )
 
+    async def _resolve_project_template(self, project_id: int) -> str:
+        chat = await self._db.chat.find_unique(where={"id": project_id})
+        if chat is None or not getattr(chat, "template", None):
+            return "free"
+        return str(chat.template)
+
+    async def _ensure_template_sections(self, project_id: int) -> None:
+        rows = await self._db.llmdocumentsection.find_many(where={"project_id": project_id}, take=1)
+        if rows:
+            return
+        template_type = await self._resolve_project_template(project_id)
+        await self.apply_template_sections(project_id, template_type)
+
     async def build_tz_result_payload(self, project_id: int, template_type: str | None = None) -> dict[str, Any]:
-        await self._ensure_default_sections(project_id)
+        await self._ensure_template_sections(project_id)
         sections = await self._db.llmdocumentsection.find_many(where={"project_id": project_id})
+        resolved_template = template_type or await self._resolve_project_template(project_id)
 
-        section_map: dict[str, str] = {
-            "general": "",
-            "functional": "",
-            "ui_ux": "",
-            "technical": "",
-            "non_functional": "",
-            "stages": "",
-            "acceptance": "",
-        }
+        ordered_sections = sorted(sections, key=lambda row: (row.level, row.section_id))
 
-        for sec in sections:
-            sid = (sec.section_id or "").lower()
-            title = (sec.title or "").lower()
-            hint = (sec.context_hint or "").lower()
-            text = sec.content_md or ""
-
-            if sid in {"sec_overview", "it_intro", "f_general", "fr_what", "c_object", "e_scope"}:
-                section_map["general"] += ("\n\n" + text if section_map["general"] and text else text)
-            elif sid in {"sec_requirements", "it_func", "f_requirements"}:
-                section_map["functional"] += ("\n\n" + text if section_map["functional"] and text else text)
-            elif sid in {"sec_architecture", "it_tech", "c_materials", "e_tech"}:
-                section_map["technical"] += ("\n\n" + text if section_map["technical"] and text else text)
-            elif "accept" in sid or "прием" in title:
-                section_map["acceptance"] += ("\n\n" + text if section_map["acceptance"] and text else text)
-            elif "stage" in sid or "этап" in title or "timeline" in sid:
-                section_map["stages"] += ("\n\n" + text if section_map["stages"] and text else text)
-            elif "ui" in sid or "ux" in sid or "интерф" in title:
-                section_map["ui_ux"] += ("\n\n" + text if section_map["ui_ux"] and text else text)
-            elif "non" in sid or "безопас" in title or "security" in hint or "performance" in hint:
-                section_map["non_functional"] += ("\n\n" + text if section_map["non_functional"] and text else text)
-            else:
-                section_map["general"] += ("\n\n" + text if section_map["general"] and text else text)
+        total_required = sum(1 for row in ordered_sections if row.required)
+        filled_required = sum(
+            1 for row in ordered_sections
+            if row.required and bool((row.content_md or "").strip())
+        )
+        total_fields = len(ordered_sections)
+        filled_fields = sum(1 for row in ordered_sections if bool((row.content_md or "").strip()))
+        completeness_percent = int((filled_required / max(total_required, 1)) * 100)
 
         return {
-            "template_type": template_type or "free",
-            "document": section_map,
+            "template_type": resolved_template,
+            "sections": [
+                {
+                    "section_id": row.section_id,
+                    "title": row.title,
+                    "level": row.level,
+                    "required": row.required,
+                    "context_hint": row.context_hint,
+                    "is_manual": row.is_manual,
+                    "content_md": row.content_md or "",
+                }
+                for row in ordered_sections
+            ],
             "validation": {
-                "is_complete": any(bool(value.strip()) for value in section_map.values()),
-                "gaps": [],
-                "conflicts": [],
-                "completeness_percent": int(
-                    (sum(1 for value in section_map.values() if value.strip()) / max(len(section_map), 1)) * 100
-                ),
-                "total_fields": len(section_map),
-                "filled_fields": sum(1 for value in section_map.values() if value.strip()),
+                "is_complete": filled_required == total_required,
+                "completeness_percent": completeness_percent,
+                "total_fields": total_fields,
+                "filled_fields": filled_fields,
             },
             "custom_sections": {},
         }
 
-    async def _ensure_default_sections(self, project_id: int) -> None:
-        rows = await self._db.llmdocumentsection.find_many(where={"project_id": project_id})
-        if rows:
-            return
+    async def resolve_section_id(self, project_id: int, candidate: str) -> str | None:
+        await self._ensure_template_sections(project_id)
+        sections = await self._db.llmdocumentsection.find_many(where={"project_id": project_id})
+        cleaned = (candidate or "").strip()
+        if not cleaned:
+            return None
 
-        defaults = [
-            {
-                "section_id": "sec_overview",
-                "title": "Общее описание проекта",
-                "level": 1,
-                "required": True,
-                "context_hint": "Общие цели, ограничения и контекст проекта",
-            },
-            {
-                "section_id": "sec_requirements",
-                "title": "Функциональные требования",
-                "level": 1,
-                "required": True,
-                "context_hint": "Функциональные требования, сценарии, роли",
-            },
-            {
-                "section_id": "sec_architecture",
-                "title": "Архитектура и технологии",
-                "level": 1,
-                "required": True,
-                "context_hint": "Архитектура, стек, инфраструктура, интеграции",
-            },
-        ]
-        for row in defaults:
-            await self._db.llmdocumentsection.create(
-                data={
-                    "project_id": project_id,
-                    **row,
-                    "content_md": "",
-                    "is_manual": False,
-                }
-            )
+        direct = next((row.section_id for row in sections if row.section_id == cleaned), None)
+        if direct:
+            return direct
+
+        top_level_key = cleaned.split(".", 1)[0].strip().lower()
+        for row in sorted(sections, key=lambda item: (item.level, item.section_id)):
+            ui_key = _detect_ui_section_key(row.section_id, row.title, row.context_hint)
+            if ui_key == top_level_key:
+                return row.section_id
+        return None
 
     async def capture_raw_source(
         self,
@@ -321,6 +322,25 @@ class GKGRepository:
             )
         return out
 
+    async def get_facts(self, project_id: int) -> list[dict[str, Any]]:
+        rows = await self._db.llmgkgfact.find_many(where={"project_id": project_id})
+        rows = sorted(rows, key=lambda row: (row.scope or "", row.property or "", row.created_at))
+
+        return [
+            {
+                "id": row.id,
+                "scope": row.scope,
+                "property": row.property,
+                "value": row.value,
+                "status": row.status,
+                "rationale": row.rationale,
+                "source_ids": _as_source_ids(row.source_ids),
+                "created_at": row.created_at.isoformat(),
+                "updated_at": row.updated_at.isoformat(),
+            }
+            for row in rows
+        ]
+
     async def get_existing_embedded_nodes(
         self,
         project_id: int,
@@ -358,7 +378,7 @@ class GKGRepository:
         return out
 
     async def get_project_snapshot(self, project_id: int) -> ProjectSnapshot:
-        await self._ensure_default_sections(project_id)
+        await self._ensure_template_sections(project_id)
         gkg_nodes = await self._db.llmgkgfact.find_many(where={"project_id": project_id})
         conflicts_count = await self._db.llmpendingconflict.count(where={"project_id": project_id})
         sections = await self._db.llmdocumentsection.find_many(where={"project_id": project_id})
@@ -379,19 +399,14 @@ class GKGRepository:
         return "\n".join(lines) if lines else "GKG is empty"
 
     async def get_doc_snapshot_text(self, project_id: int) -> str:
-        await self._ensure_default_sections(project_id)
+        await self._ensure_template_sections(project_id)
         rows = await self._db.llmdocumentsection.find_many(where={"project_id": project_id})
         rows = sorted(rows, key=lambda s: (s.level, s.section_id))
-        lines = [f"- {row.title} (len={len(row.content_md or '')})" for row in rows]
+        lines = [
+            f"- [{row.section_id}] {row.title} (len={len(row.content_md or '')})"
+            for row in rows
+        ]
         return "\n".join(lines) if lines else "Document is empty"
-
-    def _section_key_for_scope(self, scope: str) -> str:
-        scope_norm = scope.lower().strip()
-        if any(x in scope_norm for x in ("backend", "api", "db", "database", "infra")):
-            return "sec_architecture"
-        if any(x in scope_norm for x in ("role", "user", "functional", "feature", "frontend")):
-            return "sec_requirements"
-        return "sec_overview"
 
     async def _ensure_section(self, project_id: int, section_id: str, title: str | None = None) -> None:
         existing = await self._db.llmdocumentsection.find_first(
@@ -411,65 +426,6 @@ class GKGRepository:
                 "is_manual": False,
             }
         )
-
-    async def get_affected_sections(
-        self,
-        project_id: int,
-        gkg_nodes: list[GKGNode],
-    ) -> list[DocumentSnapshot]:
-        await self._ensure_default_sections(project_id)
-        if not gkg_nodes:
-            return []
-
-        selected_ids = {self._section_key_for_scope(node.scope) for node in gkg_nodes}
-        for sec_id in selected_ids:
-            await self._ensure_section(project_id, sec_id)
-
-        sections = await self._db.llmdocumentsection.find_many(where={"project_id": project_id})
-        by_id = {row.section_id: row for row in sections}
-        all_gkg = await self._db.llmgkgfact.find_many(where={"project_id": project_id})
-
-        out: list[DocumentSnapshot] = []
-        for sec_id in selected_ids:
-            sec = by_id[sec_id]
-            section_facts: list[GKGFact] = []
-            for row in all_gkg:
-                if self._section_key_for_scope(row.scope) != sec_id:
-                    continue
-                section_facts.append(
-                    GKGFact(
-                        topic_id=row.id,
-                        scope=row.scope,
-                        property=row.property,
-                        value=row.value,
-                        status=row.status,
-                        source_ids=_as_source_ids(row.source_ids),
-                    )
-                )
-
-            written_sections = [
-                WrittenSection(
-                    section_id=item.section_id,
-                    title=item.title,
-                    content_md=item.content_md or "",
-                )
-                for item in sections
-                if (item.content_md or "") and item.section_id != sec_id
-            ]
-
-            out.append(
-                DocumentSnapshot(
-                    section_id=sec.section_id,
-                    section_title=sec.title,
-                    section_level=sec.level,
-                    section_required=sec.required,
-                    context_hint=sec.context_hint,
-                    trigger_reason="spec_block_affected",
-                    section_facts=section_facts,
-                    written_sections=written_sections,
-                )
-            )
-        return out
 
     async def apply_document_updates(self, project_id: int, updates: list[ArchitectResponse]) -> None:
         for upd in updates:
@@ -526,7 +482,7 @@ class GKGRepository:
         block_id: str,
         trigger_reason: str,
     ) -> DocumentSnapshot:
-        await self._ensure_default_sections(project_id)
+        await self._ensure_template_sections(project_id)
         await self._ensure_section(project_id, block_id)
 
         sections = await self._db.llmdocumentsection.find_many(where={"project_id": project_id})
@@ -566,6 +522,22 @@ class GKGRepository:
             section_facts=facts,
             written_sections=written_sections,
         )
+
+    async def list_sections(self, project_id: int) -> list[tuple[str, str, int, bool, str, str, bool]]:
+        await self._ensure_template_sections(project_id)
+        rows = await self._db.llmdocumentsection.find_many(where={"project_id": project_id})
+        rows = sorted(rows, key=lambda row: (row.level, row.section_id))
+        return [
+            (
+                row.section_id,
+                row.title,
+                row.level,
+                row.required,
+                row.context_hint,
+                row.content_md,
+                row.is_manual
+            ) for row in rows
+        ]
 
     async def consultant_search_gkg(self, project_id: int, query: str, limit: int) -> list[GKGSearchResult]:
         query_raw = getattr(self._db, "query_raw", None)
@@ -745,7 +717,9 @@ class GKGRepository:
             status="RESOLVED",
             source_ids=[f"pending_action:{action_id}"],
             rationale="User resolved pending action",
-            embedding=[0.0, 0.0, 0.0],
+            # Keep embedding empty here: resolved user decisions are persisted as facts
+            # but are not embedded in this path, so pgvector update must be skipped.
+            embedding=[],
         )
         await self.add_gkg_nodes(project_id, [node])
         return [node]

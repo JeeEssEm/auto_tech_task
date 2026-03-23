@@ -16,6 +16,7 @@ export function ChatSidebar({ isOpen }: ChatSidebarProps) {
   const location = useLocation()
   const { isAuthenticated } = useAuth()
   const [chats, setChats] = useState<ChatPreview[]>([])
+  const activeChatId = location.pathname.match(/^\/chats\/([^/]+)/)?.[1]
 
   useEffect(() => {
     let isActive = true
@@ -80,7 +81,7 @@ export function ChatSidebar({ isOpen }: ChatSidebarProps) {
 
           <div className="flex flex-col gap-1 overflow-y-auto">
             {chats.map((chat) => {
-              const isActive = location.pathname.includes(String(chat.id))
+              const isActive = activeChatId === String(chat.id)
               return (
                 <Link
                   key={chat.id}

@@ -14,7 +14,14 @@ export function useChatMessages(chatId: string | undefined) {
 
   // Fetch messages on mount / chat change
   useEffect(() => {
-    if (!chatId) return
+    if (!chatId) {
+      setMessages([])
+      setIsLoading(false)
+      return
+    }
+
+    // Immediately clear previous chat messages to avoid stale UI during switch.
+    setMessages([])
 
     setIsLoading(true)
     const controller = new AbortController()
@@ -43,6 +50,10 @@ export function useChatMessages(chatId: string | undefined) {
 
   // WS handler — to be passed into useChatSocket at page level
   const handleLlmAnswer = useCallback((data: WsEventMap["LLM_ANSWER"]) => {
+    if (chatId && data.chat_id !== undefined && String(data.chat_id) !== String(chatId)) {
+      return
+    }
+
     const newMessage: Message = {
       id: data.id,
       sender: "LLM",
@@ -51,7 +62,7 @@ export function useChatMessages(chatId: string | undefined) {
       created_at: data.created_at,
     }
     setMessages(prev => [...prev, newMessage])
-  }, [])
+  }, [chatId])
 
   // Auto-scroll to bottom on new messages
   useEffect(() => {

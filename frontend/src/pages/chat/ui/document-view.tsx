@@ -1,6 +1,6 @@
-﻿import { useCallback, useEffect, useState } from "react"
+﻿import { useCallback, useEffect, useMemo, useState } from "react"
 import {
-  Check, ChevronDown, Circle, Download, FileCheck, Loader2,
+  Check, ChevronDown, Circle, Download, Loader2,
   Pencil, Plus, RefreshCw, ScrollText, Sparkles, Trash2,
 } from "lucide-react"
 
@@ -12,10 +12,7 @@ import type { GenerationRun } from "@/shared/api/chat-service"
 import type { ContentNode, TZResult, TZSectionConfig } from "../lib/types"
 
 type DocumentViewProps = {
-  chatId: string | undefined
-  generations: GenerationRun[]
   selected: GenerationRun | null
-  onSelect: (run: GenerationRun) => void
   content: TZResult | null
   isContentLoading: boolean
   onRegenerateBlock: (fieldPath: string, instruction?: string) => void
@@ -23,6 +20,16 @@ type DocumentViewProps = {
   onManualEdit: (fieldPath: string, value: unknown) => Promise<void>
   onExport: (resultKey: string, format: "markdown" | "word" | "pdf") => void
   onUpdateCustomSections: (sectionKey: string, nodes: ContentNode[]) => Promise<void>
+}
+
+const REF_TAG_REGEX = /<ref\b[^>]*\/>/g
+
+function stripRefTags(text: string): string {
+  return text
+    .replace(/`\s*<ref\b[^>]*\/>\s*`/g, "")
+    .replace(REF_TAG_REGEX, "")
+    .replace(/``/g, "")
+    .replace(/[ \t]{2,}/g, " ")
 }
 
 const sectionConfigs: TZSectionConfig[] = [
@@ -131,7 +138,8 @@ function addChildToSubsection(nodes: ContentNode[], parentId: string, child: Con
   return nodes.map(n => n.id === parentId ? { ...n, children: [...n.children, child] } : { ...n, children: addChildToSubsection(n.children, parentId, child) })
 }
 
-export function DocumentView({ chatId, generations, selected, onSelect, content, isContentLoading, onRegenerateBlock, onGenerateCustomBlock, onManualEdit, onExport, onUpdateCustomSections }: DocumentViewProps) {
+export function DocumentView({ selected, content, isContentLoading, onRegenerateBlock, onGenerateCustomBlock, onManualEdit, onExport, onUpdateCustomSections }: DocumentViewProps) {
+  const [mode, setMode] = useState<"view" | "edit">("view")
   const [selectedSection, setSelectedSection] = useState<string>("general")
   const [selectedSubId, setSelectedSubId] = useState<string | null>(null)
   const [exportOpen, setExportOpen] = useState(false)
@@ -148,28 +156,73 @@ export function DocumentView({ chatId, generations, selected, onSelect, content,
   const [customLoading, setCustomLoading] = useState(false)
 
   const doc = content?.document as Record<string, unknown> | undefined
+  const sectionBindings = content?.section_bindings ?? {}
   const validation = content?.validation
-  const sectionConfig = sectionConfigs.find(s => s.key === selectedSection)
+  const validationGaps = validation?.gaps ?? []
+  const apiSections = content?.sections ?? []
+  const displaySections = useMemo(() => {
+    if (apiSections.length > 0) {
+      return apiSections.map((section, idx) => ({
+        key: section.section_id,
+        sectionId: section.section_id,
+        title: section.title,
+        number: String(idx + 1),
+        contentMd: section.content_md,
+        raw: section,
+      }))
+    }
+
+    return sectionConfigs.map(section => ({
+      key: section.key,
+      sectionId: sectionBindings[section.key] ?? section.key,
+      title: section.title,
+      number: section.number,
+      contentMd: sectionDataToMarkdown(doc?.[sectionBindings[section.key] ?? section.key]),
+      raw: null,
+    }))
+  }, [apiSections, doc, sectionBindings])
+
+  const sectionConfig = displaySections.find(s => s.key === selectedSection)
   const allCustomSections = (content?.custom_sections ?? {}) as Record<string, ContentNode[]>
   const currentSubs: ContentNode[] = allCustomSections[selectedSection] ?? []
   const activeSub = selectedSubId ? findSubsectionById(currentSubs, selectedSubId) : null
-  const sectionFilled = isFilled(doc?.[selectedSection])
+  const sectionFilled = isFilled(sectionConfig?.contentMd)
 
   useEffect(() => {
-    if (selectedSubId) {
-      const subs: ContentNode[] = ((content?.custom_sections ?? {}) as Record<string, ContentNode[]>)[selectedSection] ?? []
-      const sub = findSubsectionById(subs, selectedSubId)
-      setEditorContent(sub?.content ?? "")
-      setSubTitleDraft(sub?.title ?? "")
-    } else {
-      setEditorContent(sectionDataToMarkdown(doc?.[selectedSection]))
+    if (displaySections.length === 0) return
+    if (!displaySections.some(s => s.key === selectedSection)) {
+      setSelectedSection(displaySections[0].key)
+      setSelectedSubId(null)
     }
+  }, [displaySections, selectedSection])
+
+  const rawContent = useMemo(() => {
+    if (selectedSubId) {
+      return activeSub?.content ?? ""
+    }
+    return sectionConfig?.contentMd ?? ""
+  }, [activeSub, sectionConfig, selectedSubId])
+
+  const cleanContent = useMemo(() => stripRefTags(rawContent), [rawContent])
+
+  useEffect(() => {
+    setEditorContent(cleanContent)
+    if (selectedSubId) setSubTitleDraft(activeSub?.title ?? "")
     setEditorDirty(false)
     setEditingSubTitle(false)
-  }, [selectedSection, selectedSubId, content])
+  }, [activeSub, cleanContent, content, selectedSection, selectedSubId])
 
   const genId = () => Math.random().toString(36).slice(2, 10)
-  const handleEditorChange = useCallback((md: string) => { setEditorContent(md); setEditorDirty(true) }, [])
+  const handleEditorChange = useCallback((md: string) => {
+    if (mode !== "edit") return
+    setEditorContent(md)
+    setEditorDirty(true)
+  }, [mode])
+
+  const canSwitchDocumentPoint = useCallback((): boolean => {
+    if (mode !== "edit" || !editorDirty) return true
+    return window.confirm("Есть несохраненные изменения. При переключении раздела они могут не сохраниться. Продолжить?")
+  }, [editorDirty, mode])
 
   const handleSave = useCallback(async () => {
     setSaving(true)
@@ -205,7 +258,17 @@ export function DocumentView({ chatId, generations, selected, onSelect, content,
     if (selectedSubId === id) setSelectedSubId(null)
   }, [allCustomSections, onUpdateCustomSections, selectedSubId])
 
-  const handleSelectSection = useCallback((key: string) => { setSelectedSection(key); setSelectedSubId(null) }, [])
+  const handleSelectSection = useCallback((key: string) => {
+    if (!canSwitchDocumentPoint()) return
+    setSelectedSection(key)
+    setSelectedSubId(null)
+  }, [canSwitchDocumentPoint])
+
+  const handleSelectSubsection = useCallback((sectionKey: string, subsectionId: string) => {
+    if (!canSwitchDocumentPoint()) return
+    setSelectedSection(sectionKey)
+    setSelectedSubId(subsectionId)
+  }, [canSwitchDocumentPoint])
 
   const handleRegenerate = useCallback(() => {
     setRegenLoading(true)
@@ -224,7 +287,7 @@ export function DocumentView({ chatId, generations, selected, onSelect, content,
     setTimeout(() => setCustomLoading(false), 1000)
   }, [selectedSection, customTopic, onGenerateCustomBlock])
 
-  if (generations.length === 0) {
+  if (!selected) {
     return (
       <div className="flex flex-col items-center justify-center h-full gap-3 text-center p-8">
         <ScrollText className="size-12 text-muted-foreground/30" />
@@ -243,7 +306,7 @@ export function DocumentView({ chatId, generations, selected, onSelect, content,
       return (
         <div key={node.id}>
           <button
-            onClick={() => { setSelectedSection(sectionKey); setSelectedSubId(node.id) }}
+            onClick={() => handleSelectSubsection(sectionKey, node.id)}
             className={cn("flex w-full items-center gap-1.5 rounded-md py-1 text-left text-xs transition-colors hover:bg-accent/50 group/sub", isActive && "bg-accent text-accent-foreground")}
             style={{ paddingLeft: `${8 + depth * 12}px`, paddingRight: "8px" }}
           >
@@ -263,15 +326,10 @@ export function DocumentView({ chatId, generations, selected, onSelect, content,
 
   return (
     <div className="flex flex-col h-full">
-      {/* Version selector + export */}
+      {/* Header actions */}
       <div className="flex items-center justify-between gap-2 border-b px-4 py-2.5 shrink-0">
         <div className="flex items-center gap-2 overflow-x-auto chat-scrollbar">
-          {generations.map((run, i) => (
-            <button key={run.id} onClick={() => onSelect(run)} className={cn("flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-medium transition-colors whitespace-nowrap", selected?.id === run.id ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:text-foreground hover:bg-muted/50")}>
-              <FileCheck className="size-3.5" />
-              Версия {i + 1}
-            </button>
-          ))}
+          <span className="text-xs text-muted-foreground">Рабочая версия документа</span>
         </div>
         {selected?.result_key && (
           <div className="relative shrink-0">
@@ -307,13 +365,13 @@ export function DocumentView({ chatId, generations, selected, onSelect, content,
                 </div>
                 <div className="text-[10px] text-muted-foreground mt-1">
                   {validation.filled_fields}/{validation.total_fields} полей
-                  {validation.gaps.length > 0 && ` · ${validation.gaps.length} пропусков`}
+                  {validationGaps.length > 0 && ` · ${validationGaps.length} пропусков`}
                 </div>
               </div>
             )}
 
-            {sectionConfigs.map(section => {
-              const filled = isFilled(doc?.[section.key])
+            {displaySections.map(section => {
+              const filled = isFilled(section.contentMd)
               const subs: ContentNode[] = (allCustomSections[section.key] ?? []) as ContentNode[]
               const isActiveSec = selectedSection === section.key && selectedSubId === null
               return (
@@ -339,14 +397,16 @@ export function DocumentView({ chatId, generations, selected, onSelect, content,
               <div className="flex items-center gap-2 min-w-0">
                 {activeSub ? (
                   <>
-                    {editingSubTitle ? (
+                    {editingSubTitle && mode === "edit" ? (
                       <input className="text-lg font-semibold bg-transparent border-b border-ring outline-none min-w-0" value={subTitleDraft} onChange={e => setSubTitleDraft(e.target.value)} onBlur={() => handleSaveSubTitle()} onKeyDown={e => { if (e.key === "Enter") handleSaveSubTitle(); if (e.key === "Escape") setEditingSubTitle(false) }} autoFocus />
                     ) : (
-                      <h2 className="text-lg font-semibold truncate cursor-pointer" onDoubleClick={() => { setSubTitleDraft(activeSub.title); setEditingSubTitle(true) }}>{activeSub.title || "Без названия"}</h2>
+                      <h2 className="text-lg font-semibold truncate" onDoubleClick={() => { if (mode !== "edit") return; setSubTitleDraft(activeSub.title); setEditingSubTitle(true) }}>{activeSub.title || "Без названия"}</h2>
                     )}
-                    <button className="p-1 text-muted-foreground hover:text-foreground shrink-0" onClick={() => { setSubTitleDraft(activeSub.title); setEditingSubTitle(true) }}>
-                      <Pencil className="size-3.5" />
-                    </button>
+                    {mode === "edit" && (
+                      <button className="p-1 text-muted-foreground hover:text-foreground shrink-0" onClick={() => { setSubTitleDraft(activeSub.title); setEditingSubTitle(true) }}>
+                        <Pencil className="size-3.5" />
+                      </button>
+                    )}
                   </>
                 ) : (
                   <>
@@ -360,7 +420,26 @@ export function DocumentView({ chatId, generations, selected, onSelect, content,
               </div>
 
               <div className="flex items-center gap-1.5 shrink-0">
-                {editorDirty && (
+                <div className="inline-flex rounded-md border p-0.5">
+                  <Button
+                    variant={mode === "view" ? "secondary" : "ghost"}
+                    size="sm"
+                    className="h-6 px-2 text-[11px]"
+                    onClick={() => setMode("view")}
+                  >
+                    Просмотр
+                  </Button>
+                  <Button
+                    variant={mode === "edit" ? "secondary" : "ghost"}
+                    size="sm"
+                    className="h-6 px-2 text-[11px]"
+                    onClick={() => setMode("edit")}
+                  >
+                    Редактирование
+                  </Button>
+                </div>
+
+                {mode === "edit" && editorDirty && (
                   <Button size="sm" className="h-7 text-xs gap-1.5" disabled={saving} onClick={handleSave}>
                     {saving ? <Loader2 className="size-3.5 animate-spin" /> : "Сохранить"}
                   </Button>
@@ -422,12 +501,18 @@ export function DocumentView({ chatId, generations, selected, onSelect, content,
 
             {/* Editor */}
             <div className="flex-1 overflow-y-auto chat-scrollbar p-6">
-              <RichTextEditor value={editorContent} onChange={handleEditorChange} placeholder={activeSub ? "Содержимое подпункта…" : "Содержимое раздела…"} minHeight="300px" />
-              {!activeSub && validation && validation.gaps.filter(g => g.section === selectedSection).length > 0 && (
+              <RichTextEditor
+                value={editorContent}
+                onChange={handleEditorChange}
+                placeholder={activeSub ? "Содержимое подпункта…" : "Содержимое раздела…"}
+                minHeight="300px"
+                editable={mode === "edit"}
+              />
+              {!activeSub && validation && validationGaps.filter(g => g.section === selectedSection).length > 0 && (
                 <div className="mt-6 rounded-lg border border-amber-500/20 bg-amber-500/5 p-4">
                   <p className="text-xs font-medium text-amber-600 dark:text-amber-400 mb-2">Незаполненные поля</p>
                   <div className="space-y-1">
-                    {validation.gaps.filter(g => g.section === selectedSection).map(gap => (
+                    {validationGaps.filter(g => g.section === selectedSection).map(gap => (
                       <div key={gap.field_path} className="text-xs text-foreground/70">
                         <span className="font-medium">{gap.field_name}</span>
                         <span className="text-muted-foreground"> — {gap.description}</span>

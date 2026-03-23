@@ -174,19 +174,19 @@
   margin: 0.25em 0;
 }
 .tiptap h1 {
-  font-size: 1.5em;
+  font-size: 1.125em;
   font-weight: 700;
-  margin: 1em 0 0.5em;
+  margin: 0.9em 0 0.45em;
 }
 .tiptap h2 {
-  font-size: 1.25em;
+  font-size: 1em;
   font-weight: 700;
-  margin: 1em 0 0.5em;
+  margin: 0.8em 0 0.4em;
 }
 .tiptap h3 {
-  font-size: 1.1em;
+  font-size: 0.925em;
   font-weight: 600;
-  margin: 0.75em 0 0.5em;
+  margin: 0.65em 0 0.35em;
 }
 .tiptap ul {
   list-style: disc;

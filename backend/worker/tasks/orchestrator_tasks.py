@@ -19,6 +19,25 @@ from backend.worker.modules.llm_pipeline.orchestrator.state import Attachment
 logger = structlog.get_logger(__name__)
 
 
+def _compose_architect_chat_parts(responses: list) -> list[str]:
+    if not responses:
+        return ["Принято. Изменений в документе не потребовалось."]
+
+    updated = [r.section_id for r in responses if getattr(r, "status", "") != "missing"]
+    missing = [r.section_id for r in responses if getattr(r, "status", "") == "missing"]
+
+    parts: list[str] = []
+    if updated:
+        parts.append(f"Обновил разделы ТЗ: {', '.join(updated)}.")
+    if missing:
+        parts.append(
+            "Нужны дополнительные данные по разделам: "
+            f"{', '.join(missing)}. Добавил уточняющие действия."
+        )
+
+    return parts or ["Принято. Изменений в документе не потребовалось."]
+
+
 async def _publish_status(
     redis_client: aredis.Redis,
     channel_name: str,
@@ -149,14 +168,7 @@ async def _run_tracked_generation(
             90,
         )
 
-        result_payload = await gkg_repo.build_tz_result_payload(project_id, template_type=template_type)
-        result_key = f"tz-results/{project_id}/{run.id}.json"
-        await storage.put_object(
-            bucket=config.storage.BUCKET_NAME,
-            key=result_key,
-            data=json.dumps(result_payload, ensure_ascii=False).encode("utf-8"),
-            content_type="application/json",
-        )
+        result_key = f"db://tz-results/{project_id}/{run.id}"
         await gen_repo.save_result(run.id, result_key)
 
         chat_parts = [str(p).strip() for p in (result.get("chat_parts") or []) if str(p).strip()]
@@ -239,7 +251,7 @@ async def process_message_task(
     )
 
 
-@broker.task
+@broker.task(task_name="backend.worker.tasks.orchestrator_tasks:create_tz_from_template_task")
 @inject
 async def create_tz_from_template_task(
     project_id: int,
@@ -358,10 +370,14 @@ async def regenerate_block_task(
 
 
 @broker.task
+@inject
 async def resolve_conflict_task(
     project_id: int,
+    user_id: int,
     action_id: str,
     resolution: str,
+    chat_repo: FromDishka[ChatRepository] = None,  # type: ignore[assignment]
+    redis_client: FromDishka[aredis.Redis] = None,  # type: ignore[assignment]
 ) -> dict:
     """Пользователь ответил на вопрос — обновляем GKG, запускаем кампейн."""
     deps: OrchestratorDeps = broker.state.deps
@@ -370,10 +386,54 @@ async def resolve_conflict_task(
     if deps.list_sections is None:
         raise RuntimeError("list_sections callback is not configured")
 
-    # 1. Записываем решение в GKG
-    await deps.resolve_pending_action(project_id, action_id, resolution)
+    channel_name = get_channel_name(user_id)
+    await _publish_status(
+        redis_client,
+        channel_name,
+        project_id,
+        str(GenerationRunStatus.PENDING),
+        "Применение ответа по pending action",
+        10,
+    )
 
-    # 2. Запускаем кампейн — architect сам решит что устарело
+    # 1. Записываем решение в GKG
+    resolved_nodes = await deps.resolve_pending_action(project_id, action_id, resolution)
+
+    await _publish_status(
+        redis_client,
+        channel_name,
+        project_id,
+        str(GenerationRunStatus.INGESTING),
+        "Извлечение фактов из ответа пользователя",
+        35,
+    )
+
+    harvest_text_lines = [resolution]
+    for node in resolved_nodes or []:
+        harvest_text_lines.append(f"{node.property}: {node.value}")
+    harvest_text = "\n".join(part for part in harvest_text_lines if part)
+
+    harvested = await deps.harvester.process_source(
+        source_id=f"pending_action_{action_id}",
+        text=harvest_text,
+        source_meta="pending_action_resolution",
+    )
+
+    if harvested:
+        embedded = await deps.embedder.execute(harvested)
+        judged = await deps.grouping_judge.run(embedded)
+        await deps.persist_gkg(project_id, judged.gkg_nodes, judged.pending_conflicts)
+
+    await _publish_status(
+        redis_client,
+        channel_name,
+        project_id,
+        str(GenerationRunStatus.COMPILING),
+        "Обновление разделов документа",
+        75,
+    )
+
+    # 3. Запускаем кампейн — architect сам решит что устарело
     from backend.worker.modules.llm_pipeline.steps.behaviors.architect.campaign import (
         ArchitectCampaign, SectionState,
     )
@@ -401,6 +461,38 @@ async def resolve_conflict_task(
     responses = await deps.architect.run_campaign(campaign)
     if deps.save_document_updates and responses:
         await deps.save_document_updates(project_id, responses)
+
+    chat_parts = _compose_architect_chat_parts(responses)
+    for idx, part in enumerate(chat_parts):
+        msg = await chat_repo.create_message_async(
+            chat_id=project_id,
+            text=part,
+            is_user_sender=False,
+        )
+        await redis_client.publish(
+            channel_name,
+            json.dumps(
+                {
+                    "type": EventType.LLM_ANSWER,
+                    "id": msg.id,
+                    "chat_id": project_id,
+                    "text": part,
+                    "attachments": [],
+                    "created_at": msg.created_at.isoformat(),
+                    "is_final": idx == len(chat_parts) - 1,
+                },
+                ensure_ascii=False,
+            ),
+        )
+
+    await _publish_status(
+        redis_client,
+        channel_name,
+        project_id,
+        str(GenerationRunStatus.COMPLETED),
+        "Изменения применены",
+        100,
+    )
 
     return {"updated_blocks": [r.model_dump() for r in responses]}
 

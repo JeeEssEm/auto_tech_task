@@ -2,10 +2,74 @@
 
 import { chatApi } from "@/shared/api/chat-service"
 import type { GenerationRun, ParsedAttachmentDetail } from "@/shared/api/chat-service"
-import { panelMockApi } from "../api/mock-panel-api"
-import type { KnowledgeGraph, ParsedAttachment, TZResult } from "../lib/types"
+import { tzApi } from "@/shared/api/tz-service"
+import type { KnowledgeGraph, KnowledgeGraphFact, ParsedAttachment, TZResult } from "../lib/types"
 
 export type WorkspaceTab = "document" | "files" | "graph"
+
+function buildKnowledgeGraph(facts: KnowledgeGraphFact[]): KnowledgeGraph {
+  const nodes = new Map<string, KnowledgeGraph["nodes"][number]>()
+  const edges = new Map<string, KnowledgeGraph["edges"][number]>()
+
+  for (const fact of facts) {
+    const scopeLabel = fact.scope?.trim() || "(без scope)"
+    const propertyLabel = fact.property?.trim() || "(без property)"
+    const valueLabel = fact.value?.trim() || "(без value)"
+
+    const scopeId = `scope:${scopeLabel}`
+    const propertyId = `property:${scopeLabel}:${propertyLabel}`
+    const valueId = `value:${fact.id}`
+
+    if (!nodes.has(scopeId)) {
+      nodes.set(scopeId, {
+        id: scopeId,
+        label: scopeLabel,
+        type: "scope",
+      })
+    }
+
+    if (!nodes.has(propertyId)) {
+      nodes.set(propertyId, {
+        id: propertyId,
+        label: propertyLabel,
+        type: "property",
+      })
+    }
+
+    nodes.set(valueId, {
+      id: valueId,
+      label: valueLabel,
+      type: "value",
+      status: fact.status,
+    })
+
+    const scopeToProperty = `${scopeId}->${propertyId}`
+    if (!edges.has(scopeToProperty)) {
+      edges.set(scopeToProperty, {
+        from: scopeId,
+        to: propertyId,
+        label: "имеет",
+        weight: 0,
+      })
+    }
+    const scopeEdge = edges.get(scopeToProperty)
+    if (scopeEdge) {
+      scopeEdge.weight = (scopeEdge.weight ?? 0) + 1
+    }
+
+    edges.set(`${propertyId}->${valueId}`, {
+      from: propertyId,
+      to: valueId,
+      label: "значение",
+      weight: 1,
+    })
+  }
+
+  return {
+    nodes: Array.from(nodes.values()),
+    edges: Array.from(edges.values()),
+  }
+}
 
 export function useWorkspaceData(chatId: string | undefined) {
   const [activeTab, setActiveTab] = useState<WorkspaceTab>("document")
@@ -23,6 +87,8 @@ export function useWorkspaceData(chatId: string | undefined) {
 
   // Knowledge graph (still mock)
   const [graph, setGraph] = useState<KnowledgeGraph | null>(null)
+  const [graphFacts, setGraphFacts] = useState<KnowledgeGraphFact[]>([])
+  const [focusedFactId, setFocusedFactId] = useState<string | null>(null)
 
   // Load workspace data
   useEffect(() => {
@@ -32,7 +98,7 @@ export function useWorkspaceData(chatId: string | undefined) {
     const controller = new AbortController()
 
     const loadData = async () => {
-      // Parsed files: try real API, fallback to mock
+      // Parsed files: try real API, fallback to empty list
       let parsedFiles: ParsedAttachment[]
       try {
         const real = await chatApi.getParsedAttachments(chatId, controller.signal)
@@ -44,7 +110,7 @@ export function useWorkspaceData(chatId: string | undefined) {
           transcript: f.transcript,
         }))
       } catch {
-        parsedFiles = await panelMockApi.getParsedAttachments(chatId)
+        parsedFiles = []
       }
 
       // Generations: try real API, fallback to empty
@@ -55,12 +121,13 @@ export function useWorkspaceData(chatId: string | undefined) {
         gens = []
       }
 
-      // Graph: mock for now
-      let gr: KnowledgeGraph | null
+      // Knowledge graph facts: real API, fallback to empty
+      let facts: KnowledgeGraphFact[]
       try {
-        gr = await panelMockApi.getKnowledgeGraph(chatId)
+        const response = await tzApi.getKnowledgeGraphFacts(chatId)
+        facts = response.facts
       } catch {
-        gr = null
+        facts = []
       }
 
       if (!controller.signal.aborted) {
@@ -68,7 +135,8 @@ export function useWorkspaceData(chatId: string | undefined) {
         setSelectedAttachment(parsedFiles[0] ?? null)
         setGenerations(gens)
         setSelectedGeneration(gens[gens.length - 1] ?? null)
-        setGraph(gr)
+        setGraphFacts(facts)
+        setGraph(buildKnowledgeGraph(facts))
         setIsLoading(false)
       }
     }
@@ -153,6 +221,17 @@ export function useWorkspaceData(chatId: string | undefined) {
     }
   }, [chatId, selectedAttachment])
 
+  const refreshGraph = useCallback(async () => {
+    if (!chatId) return
+    try {
+      const response = await tzApi.getKnowledgeGraphFacts(chatId)
+      setGraphFacts(response.facts)
+      setGraph(buildKnowledgeGraph(response.facts))
+    } catch {
+      // silent
+    }
+  }, [chatId])
+
   return {
     activeTab,
     setActiveTab,
@@ -166,8 +245,12 @@ export function useWorkspaceData(chatId: string | undefined) {
     generationContent,
     isContentLoading,
     graph,
+    graphFacts,
+    focusedFactId,
+    setFocusedFactId,
     refreshGenerations,
     refreshContent,
     refreshAttachments,
+    refreshGraph,
   }
 }

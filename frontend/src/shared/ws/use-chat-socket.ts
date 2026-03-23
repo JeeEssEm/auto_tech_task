@@ -42,6 +42,14 @@ export function useChatSocket(chatId: string | undefined, handlers: WsEventHandl
       ws.onmessage = (event) => {
         try {
           const data = JSON.parse(event.data)
+
+          if (chatId) {
+            const eventChatId = (data as { chat_id?: number | string }).chat_id
+            if (eventChatId !== undefined && String(eventChatId) !== String(chatId)) {
+              return
+            }
+          }
+
           const type = data.type as WsEventType
           const handler = handlersRef.current[type]
           if (handler) {

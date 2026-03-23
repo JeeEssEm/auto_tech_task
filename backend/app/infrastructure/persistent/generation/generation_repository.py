@@ -93,3 +93,11 @@ class GenerationRepository:
             }
         )
         return run is not None
+
+    async def get_run_by_result_key(self, chat_id: int, result_key: str) -> GenerationRun | None:
+        return await self._db.generationrun.find_first(
+            where={
+                "chat_id": chat_id,
+                "result_key": result_key,
+            }
+        )

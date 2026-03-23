@@ -2,6 +2,7 @@
 import { toast } from "sonner"
 
 import { chatApi } from "@/shared/api/chat-service"
+import { tzApi } from "@/shared/api/tz-service"
 import type { Attachment, Message } from "@/shared/api/chat-service"
 import type { FileItem } from "../lib/types"
 
@@ -13,6 +14,8 @@ type UseSendMessageOptions = {
   setInputValue: (value: string) => void
   clearFiles: () => void
   onAttachmentsSent?: (attachments: Attachment[]) => void
+  resolveActionId?: string | null
+  onActionResolved?: (actionId: string) => void
 }
 
 export function useSendMessage({
@@ -23,6 +26,8 @@ export function useSendMessage({
   setInputValue,
   clearFiles,
   onAttachmentsSent,
+  resolveActionId,
+  onActionResolved,
 }: UseSendMessageOptions) {
   const [isSending, setIsSending] = useState(false)
 
@@ -48,6 +53,11 @@ export function useSendMessage({
         .filter(f => f.status === "success" && f.id)
         .map(f => f.id!)
 
+      if (resolveActionId && attachmentIds.length > 0) {
+        toast.warning("Для ответа на действие отправьте только текст без файлов")
+        return
+      }
+
       const optimisticMessage: Message = {
         id: tempId,
         sender: "user",
@@ -71,15 +81,20 @@ export function useSendMessage({
       const textarea = document.querySelector("textarea")
       if (textarea) textarea.style.height = "auto"
 
-      const sentMessage = await chatApi.sendMessage(chatId, {
-        text: optimisticMessage.text,
-        attachment_ids: attachmentIds,
-      })
+      if (resolveActionId) {
+        await tzApi.resolveConflict(chatId, resolveActionId, optimisticMessage.text)
+        onActionResolved?.(resolveActionId)
+        toast.success("Ответ на действие отправлен")
+      } else {
+        const sentMessage = await chatApi.sendMessage(chatId, {
+          text: optimisticMessage.text,
+          attachment_ids: attachmentIds,
+        })
+        setMessages(prev => prev.map(m => (m.id === tempId ? sentMessage : m)))
 
-      setMessages(prev => prev.map(m => (m.id === tempId ? sentMessage : m)))
-
-      if (onAttachmentsSent && optimisticMessage.attachments.length > 0) {
-        onAttachmentsSent(optimisticMessage.attachments)
+        if (onAttachmentsSent && optimisticMessage.attachments.length > 0) {
+          onAttachmentsSent(optimisticMessage.attachments)
+        }
       }
     } catch (error) {
       setMessages(prev => prev.filter(m => m.id !== tempId))
