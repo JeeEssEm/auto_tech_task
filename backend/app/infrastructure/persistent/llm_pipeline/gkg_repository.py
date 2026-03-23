@@ -135,6 +135,41 @@ def _parse_pgvector_text(value: str | None) -> list[float]:
     return out
 
 
+_RU_TO_LATIN = {
+    "а": "a", "б": "b", "в": "v", "г": "g", "д": "d", "е": "e", "ё": "e", "ж": "zh",
+    "з": "z", "и": "i", "й": "y", "к": "k", "л": "l", "м": "m", "н": "n", "о": "o",
+    "п": "p", "р": "r", "с": "s", "т": "t", "у": "u", "ф": "f", "х": "h", "ц": "ts",
+    "ч": "ch", "ш": "sh", "щ": "sch", "ъ": "", "ы": "y", "ь": "", "э": "e", "ю": "yu", "я": "ya",
+}
+
+
+def _slugify_section_id(title: str) -> str:
+    text = (title or "").strip().lower()
+    translit_chars: list[str] = []
+    for ch in text:
+        translit_chars.append(_RU_TO_LATIN.get(ch, ch))
+    translit = "".join(translit_chars)
+    slug = re.sub(r"[^a-z0-9]+", "_", translit).strip("_")
+    return slug or "section"
+
+
+def _next_unique_section_id(base: str, taken: set[str]) -> str:
+    if base not in taken:
+        taken.add(base)
+        return base
+    suffix = 2
+    while True:
+        candidate = f"{base}_{suffix}"
+        if candidate not in taken:
+            taken.add(candidate)
+            return candidate
+        suffix += 1
+
+
+def _section_sort_key(row: LlmDocumentSection) -> tuple[int, str]:
+    return int(row.level), str(row.section_id)
+
+
 class GKGRepository:
     def __init__(self, db: Prisma):
         self._db = db
@@ -190,7 +225,7 @@ class GKGRepository:
         sections = await self._db.llmdocumentsection.find_many(where={"project_id": project_id})
         resolved_template = template_type or await self._resolve_project_template(project_id)
 
-        ordered_sections = sorted(sections, key=lambda row: (row.level, row.section_id))
+        ordered_sections = sorted(sections, key=_section_sort_key)
 
         total_required = sum(1 for row in ordered_sections if row.required)
         filled_required = sum(
@@ -220,8 +255,7 @@ class GKGRepository:
                 "completeness_percent": completeness_percent,
                 "total_fields": total_fields,
                 "filled_fields": filled_fields,
-            },
-            "custom_sections": {},
+            }
         }
 
     async def resolve_section_id(self, project_id: int, candidate: str) -> str | None:
@@ -236,11 +270,38 @@ class GKGRepository:
             return direct
 
         top_level_key = cleaned.split(".", 1)[0].strip().lower()
-        for row in sorted(sections, key=lambda item: (item.level, item.section_id)):
+        for row in sorted(sections, key=_section_sort_key):
             ui_key = _detect_ui_section_key(row.section_id, row.title, row.context_hint)
             if ui_key == top_level_key:
                 return row.section_id
         return None
+
+    async def replace_document_sections(self, project_id: int, sections: list[dict[str, Any]]) -> None:
+        existing = await self._db.llmdocumentsection.find_many(where={"project_id": project_id})
+        existing_by_id = {row.section_id: row for row in existing}
+        taken_ids: set[str] = set()
+
+        await self._db.llmdocumentsection.delete_many(where={"project_id": project_id})
+
+        for index, section in enumerate(sections):
+            title = str(section.get("title") or "").strip() or f"Section {index + 1}"
+            raw_section_id = str(section.get("section_id") or "").strip()
+            base_section_id = _slugify_section_id(raw_section_id or title)
+            section_id = _next_unique_section_id(base_section_id, taken_ids)
+            previous = existing_by_id.get(raw_section_id) or existing_by_id.get(section_id)
+
+            await self._db.llmdocumentsection.create(
+                data={
+                    "project_id": project_id,
+                    "section_id": section_id,
+                    "title": title,
+                    "level": index,
+                    "required": bool(section.get("required", previous.required if previous else True)),
+                    "context_hint": section.get("context_hint") or (previous.context_hint if previous else ""),
+                    "content_md": str(section.get("content_md") or ""),
+                    "is_manual": bool(section.get("is_manual", True)),
+                }
+            )
 
     async def capture_raw_source(
         self,
@@ -401,7 +462,7 @@ class GKGRepository:
     async def get_doc_snapshot_text(self, project_id: int) -> str:
         await self._ensure_template_sections(project_id)
         rows = await self._db.llmdocumentsection.find_many(where={"project_id": project_id})
-        rows = sorted(rows, key=lambda s: (s.level, s.section_id))
+        rows = sorted(rows, key=_section_sort_key)
         lines = [
             f"- [{row.section_id}] {row.title} (len={len(row.content_md or '')})"
             for row in rows
@@ -419,7 +480,7 @@ class GKGRepository:
                 "project_id": project_id,
                 "section_id": section_id,
                 "title": title or section_id,
-                "level": 1,
+                "level": int(await self._db.llmdocumentsection.count(where={"project_id": project_id})),
                 "required": True,
                 "context_hint": f"Auto-created from section: {section_id}",
                 "content_md": "",
@@ -438,6 +499,7 @@ class GKGRepository:
                         "project_id": project_id,
                         "section_id": upd.section_id,
                         "title": upd.section_id,
+                        "position": int(await self._db.llmdocumentsection.count(where={"project_id": project_id})),
                         "level": 1,
                         "required": False,
                         "context_hint": "Auto-created by architect",
@@ -462,7 +524,7 @@ class GKGRepository:
                     "project_id": project_id,
                     "section_id": block_id,
                     "title": block_id,
-                    "level": 1,
+                    "level": int(await self._db.llmdocumentsection.count(where={"project_id": project_id})),
                     "required": False,
                     "context_hint": "Manual section",
                     "content_md": content_md,
@@ -526,7 +588,7 @@ class GKGRepository:
     async def list_sections(self, project_id: int) -> list[tuple[str, str, int, bool, str, str, bool]]:
         await self._ensure_template_sections(project_id)
         rows = await self._db.llmdocumentsection.find_many(where={"project_id": project_id})
-        rows = sorted(rows, key=lambda row: (row.level, row.section_id))
+        rows = sorted(rows, key=_section_sort_key)
         return [
             (
                 row.section_id,

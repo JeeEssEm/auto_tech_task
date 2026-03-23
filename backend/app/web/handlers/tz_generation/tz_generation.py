@@ -14,13 +14,14 @@ from backend.app.infrastructure.persistent.llm_pipeline import GKGRepository, Pe
 from backend.app.infrastructure.storage import StorageWorker
 from backend.app.services import ChatService
 from backend.app.web.schemas.tz_generation import (
+    DocumentSectionPayload,
     ExportTZRequest,
     GenerateCustomBlockRequest,
     ManualEditBlockRequest,
     RegenerateBlockRequest,
     ResolveConflictRequest,
     RunFullPipelineRequest,
-    UpdateCustomSectionsRequest,
+    UpdateSectionsRequest,
     UpdateTZRequest,
 )
 
@@ -246,43 +247,35 @@ async def manual_edit_block(
     return {"status": "ok"}
 
 
-def _validate_depth(nodes: list, current_depth: int = 1, max_depth: int = 3) -> None:
-    """Проверяет, что глубина дерева подпунктов не превышает max_depth."""
-    if current_depth > max_depth:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Maximum subsection nesting depth is {max_depth}",
-        )
-    for node in nodes:
-        children = node.children if hasattr(node, "children") else node.get("children", [])
-        if children:
-            _validate_depth(children, current_depth + 1, max_depth)
+def _validate_sections(sections: list[DocumentSectionPayload]) -> None:
+    """MVP: проверяет плоский список секций, где level используется как порядок."""
+    if not sections:
+        raise HTTPException(status_code=400, detail="At least one section is required")
+
+    for section in sections:
+        if int(section.level) < 0:
+            raise HTTPException(status_code=400, detail="Section level must be >= 0")
+        if not section.title.strip():
+            raise HTTPException(status_code=400, detail="Section title cannot be empty")
 
 
-@router.post("/{chat_id}/update-custom-sections")
-async def update_custom_sections(
+@router.post("/{chat_id}/update-sections")
+async def update_sections(
     chat_id: int,
-    body: UpdateCustomSectionsRequest,
+    body: UpdateSectionsRequest,
     user: FromDishka[AuthenticatedUser],
     chat_repo: FromDishka[ChatRepository],
-    gen_repo: FromDishka[GenerationRepository],
+    gkg_repo: FromDishka[GKGRepository],
 ) -> dict[str, str]:
-    """Сохранение пользовательских подпунктов секции ТЗ."""
+    """Полное сохранение структуры секций ТЗ."""
     await _ensure_user_owns_chat(chat_repo, user.id, chat_id)
 
-    _validate_depth(body.sections)
+    _validate_sections(body.sections)
 
-    run = await gen_repo.get_latest_run(chat_id)
-    if not run:
-        raise HTTPException(status_code=404, detail="No generation found")
-
-    state = json.loads(run.state_json) if run.state_json else {}
-    internal = state.get("internal_state", {})
-    custom_sections = internal.get("custom_sections", {})
-    custom_sections[body.section_key] = [s.model_dump() for s in body.sections]
-    internal["custom_sections"] = custom_sections
-    state["internal_state"] = internal
-    await gen_repo.save_state(run.id, json.dumps(state, ensure_ascii=False))
+    await gkg_repo.replace_document_sections(
+        chat_id,
+        [section.model_dump() for section in body.sections],
+    )
 
     return {"status": "ok"}
 
@@ -391,11 +384,6 @@ async def get_generation_content(
         raise HTTPException(status_code=404, detail="Generation content not found")
 
     payload = await gkg_repo.build_tz_result_payload(chat_id)
-    state = json.loads(run.state_json) if run.state_json else {}
-    internal = state.get("internal_state", {})
-    custom_sections = internal.get("custom_sections", {})
-    if isinstance(custom_sections, dict):
-        payload["custom_sections"] = custom_sections
 
     return {"content": payload}
 

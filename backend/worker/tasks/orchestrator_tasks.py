@@ -1,5 +1,7 @@
 import asyncio
 import json
+import re
+from datetime import UTC, datetime
 
 import redis.asyncio as aredis
 import structlog
@@ -13,10 +15,79 @@ from backend.app.infrastructure.persistent.llm_pipeline import GKGRepository
 from backend.app.infrastructure.storage import StorageWorker
 from backend.app.infrastructure.utils.channels import get_channel_name
 from backend.worker.broker import broker
+from backend.worker.modules.export.exporters import get_exporter
 from backend.worker.modules.llm_pipeline.orchestrator.nodes import OrchestratorDeps
 from backend.worker.modules.llm_pipeline.orchestrator.state import Attachment
 
 logger = structlog.get_logger(__name__)
+
+_REF_TAG_REGEX = re.compile(r"<ref\b[^>]*\/>")
+_CODE_WRAPPED_REF_REGEX = re.compile(r"`\s*<ref\b[^>]*\/>\s*`")
+_ATX_HEADING_REGEX = re.compile(r"^(\s{0,3})(#{1,6})(\s+)(.*)$")
+
+
+def _strip_ref_tags(text: str) -> str:
+    cleaned = _CODE_WRAPPED_REF_REGEX.sub("", text)
+    cleaned = _REF_TAG_REGEX.sub("", cleaned)
+    cleaned = cleaned.replace("``", "")
+    cleaned = re.sub(r"[ \t]{2,}", " ", cleaned)
+    return cleaned
+
+
+def _normalize_content_headings(content_md: str, section_heading_level: int) -> str:
+    lines = content_md.splitlines()
+    heading_levels: list[int] = []
+
+    for line in lines:
+        m = _ATX_HEADING_REGEX.match(line)
+        if m:
+            heading_levels.append(len(m.group(2)))
+
+    if not heading_levels:
+        return content_md
+
+    min_content_level = min(heading_levels)
+    required_min_level = min(section_heading_level + 1, 6)
+    shift = max(0, required_min_level - min_content_level)
+    if shift == 0:
+        return content_md
+
+    normalized: list[str] = []
+    for line in lines:
+        m = _ATX_HEADING_REGEX.match(line)
+        if not m:
+            normalized.append(line)
+            continue
+
+        indent, hashes, sep, rest = m.groups()
+        new_level = min(len(hashes) + shift, 6)
+        normalized.append(f"{indent}{'#' * new_level}{sep}{rest}")
+
+    return "\n".join(normalized)
+
+
+def _sanitize_export_content_md(content_md: str, section_heading_level: int) -> str:
+    cleaned = _strip_ref_tags(content_md)
+    return _normalize_content_headings(cleaned, section_heading_level)
+
+
+def _render_sections_to_markdown(sections: list[dict]) -> str:
+    lines: list[str] = ["# Техническое задание", ""]
+
+    for section in sections:
+        title = str(section.get("title") or section.get("section_id") or "Раздел").strip()
+        level_raw = int(section.get("level") or 1)
+        heading_level = max(2, min(level_raw + 1, 6))
+        content_md = str(section.get("content_md") or "").strip()
+        content_md = _sanitize_export_content_md(content_md, heading_level)
+
+        lines.append(f"{'#' * heading_level} {title}")
+        lines.append("")
+        if content_md:
+            lines.append(content_md)
+            lines.append("")
+
+    return "\n".join(lines).strip() + "\n"
 
 
 def _compose_architect_chat_parts(responses: list) -> list[str]:
@@ -528,3 +599,81 @@ async def lock_block_task(
     # Помечаем блок как locked
     await deps.mark_block_manual(project_id, block_id, content_md)
     return {"block_id": block_id, "status": "locked"}
+
+
+@broker.task
+@inject
+async def export_tz_task(
+    project_id: int,
+    user_id: int,
+    result_key: str,
+    format: str,
+    gen_repo: FromDishka[GenerationRepository],
+    gkg_repo: FromDishka[GKGRepository],
+    storage: FromDishka[StorageWorker],
+    config: FromDishka[AppSettings],
+    redis_client: FromDishka[aredis.Redis],
+) -> dict:
+    channel_name = get_channel_name(user_id)
+
+    try:
+        run = await gen_repo.get_run_by_result_key(project_id, result_key)
+        if run is None:
+            raise RuntimeError("Generation result not found")
+
+        payload = await gkg_repo.build_tz_result_payload(project_id)
+        sections = payload.get("sections") if isinstance(payload, dict) else None
+        if not isinstance(sections, list) or len(sections) == 0:
+            raise RuntimeError("No document sections available for export")
+
+        markdown_content = _render_sections_to_markdown(sections)
+        exporter = get_exporter(format)
+        file_bytes = await exporter.export(markdown_content)
+
+        ts = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
+        export_key = f"exports/{project_id}/tz-{run.id}-{ts}.{exporter.file_extension}"
+        await storage.put_object(
+            bucket=config.storage.BUCKET_NAME,
+            key=export_key,
+            data=file_bytes,
+            content_type=exporter.content_type,
+        )
+
+        await redis_client.publish(
+            channel_name,
+            json.dumps(
+                {
+                    "type": EventType.EXPORT_READY,
+                    "chat_id": project_id,
+                    "export_key": export_key,
+                    "format": format,
+                },
+                ensure_ascii=False,
+            ),
+        )
+
+        return {
+            "status": "ok",
+            "export_key": export_key,
+            "format": format,
+        }
+    except Exception as exc:
+        logger.exception(
+            "export_tz_failed",
+            chat_id=project_id,
+            user_id=user_id,
+            result_key=result_key,
+            format=format,
+        )
+        await redis_client.publish(
+            channel_name,
+            json.dumps(
+                {
+                    "type": EventType.ERROR,
+                    "chat_id": project_id,
+                    "message": f"Export failed: {exc}",
+                },
+                ensure_ascii=False,
+            ),
+        )
+        raise

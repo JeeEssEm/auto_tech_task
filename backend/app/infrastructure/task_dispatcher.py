@@ -159,4 +159,11 @@ class TaskiqDispatcher(TaskDispatcher):
             result_key: str,
             format: str,
     ) -> None:
-        raise NotImplementedError("Export task is not implemented for orchestrator pipeline")
+        from backend.worker.tasks.orchestrator_tasks import export_tz_task
+
+        await export_tz_task.kiq(
+            project_id=chat_id,
+            user_id=user_id,
+            result_key=result_key,
+            format=format,
+        )

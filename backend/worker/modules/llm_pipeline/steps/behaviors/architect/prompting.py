@@ -133,10 +133,10 @@ _WRITING_RULES = """
 - Be specific: write "PostgreSQL 16" not "реляционная СУБД".
 - Density over length: one precise paragraph beats three vague ones.
 
-### Header level invariant (important!)
-The block you are writing has a `level` field. Any header inside content_md
-must be at least level+1. If block level=2, use ### or #### inside — never # or ##.
-This prevents section "escaping" its parent when the document is assembled.
+### Headers inside content_md
+Always use ## as the top-level header inside content_md.
+Use ### for subsections within the section, #### for deeper nesting.
+Never use # (h1) — it is reserved for the document title.
 
 ### Grounding (mandatory)
 Every factual claim must end with a hidden reference tag:
@@ -162,7 +162,7 @@ _EXAMPLE = """
 ## Example reasoning cycle
 
 [CURRENT SECTION]
-id: it_tech_stack | title: "Стек технологий" | level: 2 | required: true
+id: it_tech_stack | title: "Стек технологий" | position: 3 | required: true
 context_hint: "Языки, фреймворки, СУБД, очереди — все упомянутые технологии"
 
 [SECTION FACTS]
@@ -395,7 +395,7 @@ def format_document_state(sections: list) -> str:  # list[SectionState]
         if sec.content_md and not sec.is_manual:
             preview = " | " + sec.content_md[:80].replace("\n", " ") + ("..." if len(sec.content_md) > 80 else "")
         lines.append(
-            f"  [{sec.section_id}] {'#' * sec.level} {sec.title} "
+            f"  {sec.level}. [{sec.section_id}] {sec.title} "
             f"({'required' if sec.required else 'optional'}) — {status}{preview}"
         )
     return "\n".join(lines)
@@ -422,7 +422,7 @@ Your task: decide WHICH sections to write and in WHAT ORDER.
    affected by the GKG changes — look at context_hint and current content.
 4. For trigger=explicit_regen_request: use user_message to understand 
    what sections to update. Can be one or many.
-5. Write sections in order: level 1 before level 2, parents before children.
+5. Write sections in the order they appear in the document (by position number).
 6. If nothing needs writing — return empty sections_to_write.
 
 ## Output format
@@ -447,7 +447,7 @@ def build_plan_user_prompt(
     user_msg_block = f"\n[USER REQUEST]\n{campaign.user_message}\n" if campaign.user_message else ""
 
     lines = []
-    for sec in campaign.document:
+    for sec in sorted(campaign.document, key=lambda s: s.level):
         if sec.is_manual:
             status = "🔒 manual — skip"
             facts_note = ""
@@ -460,7 +460,7 @@ def build_plan_user_prompt(
                 facts_note = ""
 
         lines.append(
-            f"  [{sec.section_id}] {'#' * sec.level} {sec.title} "
+            f" {sec.level}. [{sec.section_id}] {sec.title} "
             f"({'required' if sec.required else 'optional'}) — {status}{facts_note}"
         )
 

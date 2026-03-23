@@ -37,6 +37,16 @@ export type KnowledgeGraphFactsResponse = {
   facts: KnowledgeGraphFactDto[]
 }
 
+export type UpdateDocumentSectionDto = {
+  section_id?: string
+  title: string
+  level: number
+  content_md: string
+  required?: boolean
+  context_hint?: string | null
+  is_manual?: boolean
+}
+
 export const tzApi = {
   /** Получение статуса последней генерации */
   getGenerationStatus: async (chatId: string): Promise<{ status: string | null }> => {
@@ -121,14 +131,12 @@ export const tzApi = {
     })
   },
 
-  /** Обновление пользовательских подпунктов секции */
-  updateCustomSections: async (
+  /** Полное сохранение структуры секций */
+  updateSections: async (
     chatId: string,
-    sectionKey: string,
-    sections: { id: string; title: string; content: string; children: unknown[] }[],
+    sections: UpdateDocumentSectionDto[],
   ): Promise<{ status: string }> => {
-    return apiClient.post(`/tz/${chatId}/update-custom-sections`, {
-      section_key: sectionKey,
+    return apiClient.post(`/tz/${chatId}/update-sections`, {
       sections,
     })
   },

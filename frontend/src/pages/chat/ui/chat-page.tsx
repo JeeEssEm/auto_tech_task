@@ -17,9 +17,10 @@ import { useGenerationStatus } from "../hooks/use-generation-status"
 import { useParsingStatus } from "../hooks/use-parsing-status"
 import { useSendMessage } from "../hooks/use-send-message"
 import { useWorkspaceData } from "../hooks/use-workspace-data"
+import type { TZSection } from "../lib/types"
 import type { WorkspaceTab } from "../hooks/use-workspace-data"
 import { ChatPanel } from "./chat-panel"
-import { DocumentView } from "./document-view"
+import { DocumentView } from "./document-view.tsx"
 import { AttachmentsTab } from "./side-panel/attachments-tab"
 import { KnowledgeGraphTab } from "./side-panel/knowledge-graph-tab"
 
@@ -240,16 +241,6 @@ export function ChatPage() {
     [id],
   )
 
-  const handleManualEdit = useCallback(
-    async (fieldPath: string, value: unknown) => {
-      if (!id) return
-      await tzApi.manualEditBlock(id, fieldPath, value)
-      toast.success("Изменения сохранены")
-      workspace.refreshContent()
-    },
-    [id, workspace.refreshContent],
-  )
-
   const handleExport = useCallback(
     (resultKey: string, format: "markdown" | "word" | "pdf") => {
       if (!id) return
@@ -263,10 +254,11 @@ export function ChatPage() {
     [id],
   )
 
-  const handleUpdateCustomSections = useCallback(
-    async (sectionKey: string, nodes: import("../lib/types").ContentNode[]) => {
+  const handleSaveSections = useCallback(
+    async (sections: TZSection[]) => {
       if (!id) return
-      await tzApi.updateCustomSections(id, sectionKey, nodes)
+      await tzApi.updateSections(id, sections)
+      toast.success("Документ сохранен")
       workspace.refreshContent()
     },
     [id, workspace.refreshContent],
@@ -346,9 +338,8 @@ export function ChatPage() {
               isContentLoading={workspace.isContentLoading}
               onRegenerateBlock={handleRegenerateBlock}
               onGenerateCustomBlock={handleGenerateCustomBlock}
-              onManualEdit={handleManualEdit}
               onExport={handleExport}
-              onUpdateCustomSections={handleUpdateCustomSections}
+              onSaveSections={handleSaveSections}
             />
           )}
           {workspace.activeTab === "files" && (

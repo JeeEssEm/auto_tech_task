@@ -82,24 +82,22 @@ class ExportTZRequest(BaseModel):
     )
 
 
-class ContentNodePayload(BaseModel):
-    """Подпункт ТЗ, созданный пользователем."""
-    id: str = Field(description="Уникальный идентификатор")
-    title: str = Field(default="", description="Заголовок подпункта")
-    content: str = Field(default="", description="Содержимое (markdown)")
-    children: list["ContentNodePayload"] = Field(
-        default_factory=list, description="Дочерние подпункты (макс. 3 уровня)",
+class DocumentSectionPayload(BaseModel):
+    """Секция ТЗ для полного сохранения структуры документа."""
+    section_id: str | None = Field(
+        default=None,
+        description="Идентификатор секции (может быть пустым для новых секций)",
     )
+    title: str = Field(description="Заголовок секции")
+    level: int = Field(default=1, description="Уровень вложенности секции")
+    content_md: str = Field(default="", description="Содержимое секции в markdown")
+    required: bool = Field(default=True, description="Обязательность секции")
+    context_hint: str | None = Field(default=None, description="Контекстная подсказка")
+    is_manual: bool = Field(default=True, description="Секция создана/изменена вручную")
 
 
-ContentNodePayload.model_rebuild()
-
-
-class UpdateCustomSectionsRequest(BaseModel):
-    """Обновление пользовательских подпунктов секции ТЗ."""
-    section_key: str = Field(
-        description="Ключ секции (например, 'general', 'functional')",
-    )
-    sections: list[ContentNodePayload] = Field(
-        description="Полное дерево подпунктов для секции",
+class UpdateSectionsRequest(BaseModel):
+    """Полное обновление секций ТЗ (порядок, вложенность, названия, контент)."""
+    sections: list[DocumentSectionPayload] = Field(
+        description="Полный список секций документа в требуемом порядке",
     )
